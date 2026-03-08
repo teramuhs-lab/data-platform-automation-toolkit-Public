@@ -1,0 +1,13 @@
+# Docker container-to-container configuration
+environment: docker
+sql:
+  driver: "ODBC Driver 18 for SQL Server"
+  server: "mssql,1433"
+  database: "master"
+  username: "sa"
+  password_env: "DBOPS_SQL_PASSWORD"
+options:
+  encrypt: false
+  trust_server_certificate: true
+backup:
+  backup_dir: "/backups"

@@ -1,0 +1,13 @@
+# Development environment configuration
+environment: dev
+sql:
+  driver: "ODBC Driver 18 for SQL Server"
+  server: "127.0.0.1,1433"
+  database: "master"
+  username: "sa"
+  password_env: "DBOPS_SQL_PASSWORD"   # do NOT store password here
+options:
+  encrypt: false
+  trust_server_certificate: true
+backup:
+  backup_dir: "/backups"

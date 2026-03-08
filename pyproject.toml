@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dbops"
+version = "0.1.0"
+description = "Data Platform Automation Toolkit (DBA DevOps CLI)"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12",
+  "pyyaml>=6.0",
+  "rich>=13.0",
+  "pyodbc>=5.0"
+]
+
+[project.scripts]
+dbops = "dbops.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

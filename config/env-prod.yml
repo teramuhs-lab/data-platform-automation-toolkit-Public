@@ -1,0 +1,18 @@
+# Production environment configuration
+environment: prod
+
+database:
+  host: ${DB_HOST}
+  port: 1433
+  trusted_connection: true
+  connect_timeout: 30
+
+backup:
+  path: /var/backups/mssql
+  compression: true
+  verify_after_backup: true
+  retention_days: 30
+
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
