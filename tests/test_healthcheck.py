@@ -1,7 +1,6 @@
 """Tests for the health check command (mocked DB calls)."""
 
 import os
-import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -92,7 +91,10 @@ def test_healthcheck_runs_all_queries(mock_get_conn, config_file):
     assert mock_cursor.execute.call_count == len(HEALTH_CHECKS)
 
 
-@patch("dbops.commands.healthcheck.get_connection", side_effect=Exception("Connection refused"))
+@patch(
+    "dbops.commands.healthcheck.get_connection",
+    side_effect=Exception("Connection refused"),
+)
 def test_healthcheck_exits_on_connection_failure(mock_get_conn, config_file):
     """Verify healthcheck exits with code 1 when connection fails."""
     with pytest.raises(SystemExit) as exc_info:

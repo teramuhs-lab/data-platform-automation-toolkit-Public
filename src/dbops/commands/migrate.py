@@ -8,7 +8,6 @@ Migration state is stored in dbops.migration_history on the target database.
 """
 
 import hashlib
-import logging
 import re
 import time
 from pathlib import Path
@@ -43,9 +42,9 @@ def _parse_script_name(filename: str) -> dict | None:
     if not match:
         return None
     return {
-        "type": match.group(1),        # V or R
-        "version": match.group(2),     # 001, 002, ...
-        "description": match.group(3), # human-readable
+        "type": match.group(1),  # V or R
+        "version": match.group(2),  # 001, 002, ...
+        "description": match.group(3),  # human-readable
         "filename": filename,
     }
 
@@ -71,8 +70,14 @@ def _execute_sql_script(cursor, sql_text: str) -> None:
             cursor.execute(batch)
 
 
-def _record_migration(cursor, version: str, script_name: str,
-                       checksum: str, execution_ms: int, success: bool) -> None:
+def _record_migration(
+    cursor,
+    version: str,
+    script_name: str,
+    checksum: str,
+    execution_ms: int,
+    success: bool,
+) -> None:
     """Insert a record into the migration history table."""
     cursor.execute(
         """
@@ -86,25 +91,38 @@ def _record_migration(cursor, version: str, script_name: str,
             INSERT (version, script_name, checksum, execution_ms, success)
             VALUES (?, ?, ?, ?, ?);
         """,
-        version, checksum, execution_ms, success,
-        version, script_name, checksum, execution_ms, success,
+        version,
+        checksum,
+        execution_ms,
+        success,
+        version,
+        script_name,
+        checksum,
+        execution_ms,
+        success,
     )
 
 
-def run_migrate(config_path: str, target_database: str | None = None,
-                dry_run: bool = False, run_tests: bool = False) -> None:
+def run_migrate(
+    config_path: str,
+    target_database: str | None = None,
+    dry_run: bool = False,
+    run_tests: bool = False,
+) -> None:
     """Apply pending migrations, seed data, and optionally run DB tests."""
     config = load_config(config_path)
     if target_database:
         config["sql"]["database"] = target_database
 
     db_name = config["sql"]["database"]
-    console.print(Panel(
-        f"[bold]Database Migration[/bold]\n"
-        f"Target: [cyan]{config['sql']['server']}[/cyan] / [cyan]{db_name}[/cyan]\n"
-        f"Mode:   [yellow]{'DRY RUN' if dry_run else 'APPLY'}[/yellow]",
-        title="dbops migrate",
-    ))
+    console.print(
+        Panel(
+            f"[bold]Database Migration[/bold]\n"
+            f"Target: [cyan]{config['sql']['server']}[/cyan] / [cyan]{db_name}[/cyan]\n"
+            f"Mode:   [yellow]{'DRY RUN' if dry_run else 'APPLY'}[/yellow]",
+            title="dbops migrate",
+        )
+    )
 
     # ---- Discover scripts ----
     versioned = sorted(
@@ -147,17 +165,23 @@ def run_migrate(config_path: str, target_database: str | None = None,
             if applied[version] != cs:
                 msg = f"CHECKSUM MISMATCH for {script_path.name} — already applied with different content"
                 logger.error(msg)
-                table.add_row(script_path.name, version, "[red]CHECKSUM MISMATCH[/red]", "-")
+                table.add_row(
+                    script_path.name, version, "[red]CHECKSUM MISMATCH[/red]", "-"
+                )
                 failed_count += 1
                 if is_json_mode():
-                    add_json_result("migrate", "error", {"script": script_path.name, "error": msg})
+                    add_json_result(
+                        "migrate", "error", {"script": script_path.name, "error": msg}
+                    )
                 continue
             table.add_row(script_path.name, version, "[dim]already applied[/dim]", "-")
             skipped_count += 1
             continue
 
         if dry_run:
-            table.add_row(script_path.name, version, "[yellow]pending (dry run)[/yellow]", "-")
+            table.add_row(
+                script_path.name, version, "[yellow]pending (dry run)[/yellow]", "-"
+            )
             applied_count += 1
             continue
 
@@ -168,24 +192,37 @@ def run_migrate(config_path: str, target_database: str | None = None,
             _execute_sql_script(cursor, sql_text)
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             _record_migration(cursor, version, script_path.name, cs, elapsed_ms, True)
-            table.add_row(script_path.name, version, "[green]applied[/green]", str(elapsed_ms))
+            table.add_row(
+                script_path.name, version, "[green]applied[/green]", str(elapsed_ms)
+            )
             applied_count += 1
             logger.info("Applied %s (%d ms)", script_path.name, elapsed_ms)
             if is_json_mode():
-                add_json_result("migrate", "ok", {"script": script_path.name, "ms": elapsed_ms})
+                add_json_result(
+                    "migrate", "ok", {"script": script_path.name, "ms": elapsed_ms}
+                )
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - start) * 1000)
-            table.add_row(script_path.name, version, f"[red]FAILED[/red]", str(elapsed_ms))
+            table.add_row(
+                script_path.name, version, "[red]FAILED[/red]", str(elapsed_ms)
+            )
             failed_count += 1
             logger.error("Failed %s: %s", script_path.name, exc)
             if is_json_mode():
-                add_json_result("migrate", "error", {"script": script_path.name, "error": str(exc)})
+                add_json_result(
+                    "migrate", "error", {"script": script_path.name, "error": str(exc)}
+                )
 
     # ---- Apply repeatable (seed) scripts ----
     for script_path in repeatable:
         info = _parse_script_name(script_path.name)
         if dry_run:
-            table.add_row(script_path.name, f"R{info['version']}", "[yellow]seed (dry run)[/yellow]", "-")
+            table.add_row(
+                script_path.name,
+                f"R{info['version']}",
+                "[yellow]seed (dry run)[/yellow]",
+                "-",
+            )
             continue
 
         sql_text = script_path.read_text(encoding="utf-8")
@@ -193,11 +230,21 @@ def run_migrate(config_path: str, target_database: str | None = None,
         try:
             _execute_sql_script(cursor, sql_text)
             elapsed_ms = int((time.perf_counter() - start) * 1000)
-            table.add_row(script_path.name, f"R{info['version']}", "[green]seeded[/green]", str(elapsed_ms))
+            table.add_row(
+                script_path.name,
+                f"R{info['version']}",
+                "[green]seeded[/green]",
+                str(elapsed_ms),
+            )
             logger.info("Seeded %s (%d ms)", script_path.name, elapsed_ms)
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - start) * 1000)
-            table.add_row(script_path.name, f"R{info['version']}", "[red]FAILED[/red]", str(elapsed_ms))
+            table.add_row(
+                script_path.name,
+                f"R{info['version']}",
+                "[red]FAILED[/red]",
+                str(elapsed_ms),
+            )
             failed_count += 1
             logger.error("Seed failed %s: %s", script_path.name, exc)
 
@@ -219,22 +266,32 @@ def run_migrate(config_path: str, target_database: str | None = None,
                 console.print(f"  [red]FAIL[/red]: {test_path.name} — {exc}")
                 failed_count += 1
                 if is_json_mode():
-                    add_json_result("db_test", "fail", {"test": test_path.name, "error": str(exc)})
+                    add_json_result(
+                        "db_test", "fail", {"test": test_path.name, "error": str(exc)}
+                    )
 
     # ---- Summary ----
     status = "FAIL" if failed_count > 0 else "OK"
-    console.print(Panel(
-        f"Applied: [green]{applied_count}[/green]  "
-        f"Skipped: [dim]{skipped_count}[/dim]  "
-        f"Failed: [red]{failed_count}[/red]",
-        title=f"Migration {status}",
-        border_style="red" if failed_count else "green",
-    ))
+    console.print(
+        Panel(
+            f"Applied: [green]{applied_count}[/green]  "
+            f"Skipped: [dim]{skipped_count}[/dim]  "
+            f"Failed: [red]{failed_count}[/red]",
+            title=f"Migration {status}",
+            border_style="red" if failed_count else "green",
+        )
+    )
 
     if is_json_mode():
-        add_json_result("summary", status.lower(), {
-            "applied": applied_count, "skipped": skipped_count, "failed": failed_count,
-        })
+        add_json_result(
+            "summary",
+            status.lower(),
+            {
+                "applied": applied_count,
+                "skipped": skipped_count,
+                "failed": failed_count,
+            },
+        )
         flush_json()
 
     cursor.close()

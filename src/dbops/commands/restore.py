@@ -63,10 +63,12 @@ def run_restore(
         conn = get_connection(config)
         conn.autocommit = True  # RESTORE requires autocommit
     except Exception as e:
-        console.print(Panel(
-            f"[bold red]FAIL[/]  Could not connect\n{e}",
-            title="Restore",
-        ))
+        console.print(
+            Panel(
+                f"[bold red]FAIL[/]  Could not connect\n{e}",
+                title="Restore",
+            )
+        )
         raise SystemExit(1)
 
     cursor = conn.cursor()
@@ -129,9 +131,7 @@ def run_restore(
 
     # --- Step 3: Verify restored database is online ---
     console.rule("[bold]Step 3: Verifying database status[/]")
-    cursor.execute(
-        "SELECT name, state_desc FROM sys.databases WHERE name = ?", target
-    )
+    cursor.execute("SELECT name, state_desc FROM sys.databases WHERE name = ?", target)
     row = cursor.fetchone()
     if row and row[1] == "ONLINE":
         console.print(f"  [bold green]ONLINE[/]  {row[0]}")

@@ -54,6 +54,7 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
 # JSON mode helpers
 # ---------------------------------------------------------------------------
 
+
 def set_json_mode(enabled: bool) -> None:
     """Enable or disable JSON output mode."""
     global _json_mode, _json_results

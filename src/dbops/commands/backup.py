@@ -84,10 +84,12 @@ def run_backup(config_path: str, database: str | None = None, verify: bool = Tru
         conn = get_connection(config)
         conn.autocommit = True  # BACKUP requires autocommit
     except Exception as e:
-        console.print(Panel(
-            f"[bold red]FAIL[/]  Could not connect\n{e}",
-            title="Backup",
-        ))
+        console.print(
+            Panel(
+                f"[bold red]FAIL[/]  Could not connect\n{e}",
+                title="Backup",
+            )
+        )
         raise SystemExit(1)
 
     cursor = conn.cursor()
@@ -103,12 +105,14 @@ def run_backup(config_path: str, database: str | None = None, verify: bool = Tru
             conn.close()
             return
 
-    console.print(Panel(
-        f"Databases: [cyan]{', '.join(databases)}[/]\n"
-        f"Backup dir: [dim]{backup_dir}[/]\n"
-        f"Verify: {'yes' if verify else 'no'}",
-        title="Backup Plan",
-    ))
+    console.print(
+        Panel(
+            f"Databases: [cyan]{', '.join(databases)}[/]\n"
+            f"Backup dir: [dim]{backup_dir}[/]\n"
+            f"Verify: {'yes' if verify else 'no'}",
+            title="Backup Plan",
+        )
+    )
     console.print()
 
     succeeded = 0
@@ -131,5 +135,8 @@ def run_backup(config_path: str, database: str | None = None, verify: bool = Tru
     if failed:
         console.print(f"  [red]Failed:[/]    {failed}")
     console.print()
-    console.print("[bold green]Backup complete.[/]" if not failed
-                  else "[bold red]Backup completed with errors.[/]")
+    console.print(
+        "[bold green]Backup complete.[/]"
+        if not failed
+        else "[bold red]Backup completed with errors.[/]"
+    )

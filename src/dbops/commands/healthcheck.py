@@ -28,14 +28,14 @@ from dbops.logging import (
 console = Console()
 
 
-HEALTH_CHECKS = OrderedDict({
-    "Server Identity": """
+HEALTH_CHECKS = OrderedDict(
+    {
+        "Server Identity": """
         SELECT
             @@SERVERNAME  AS server_name,
             @@VERSION     AS server_version
     """,
-
-    "Database List": """
+        "Database List": """
         SELECT
             d.name,
             d.state_desc                                      AS status,
@@ -46,12 +46,10 @@ HEALTH_CHECKS = OrderedDict({
         GROUP BY d.name, d.state_desc, d.recovery_model_desc
         ORDER BY d.name
     """,
-
-    "Disk Space (xp_fixeddrives)": """
+        "Disk Space (xp_fixeddrives)": """
         EXEC xp_fixeddrives
     """,
-
-    "AG Replica Status": """
+        "AG Replica Status": """
         SELECT
             ag.name                   AS ag_name,
             ar.replica_server_name    AS replica,
@@ -63,8 +61,7 @@ HEALTH_CHECKS = OrderedDict({
         JOIN sys.dm_hadr_availability_replica_states ars
             ON ar.replica_id = ars.replica_id
     """,
-
-    "Top 5 Wait Stats": """
+        "Top 5 Wait Stats": """
         SELECT TOP 5
             wait_type,
             CAST(wait_time_ms / 1000.0 AS DECIMAL(12,2))           AS wait_sec,
@@ -83,15 +80,13 @@ HEALTH_CHECKS = OrderedDict({
         )
         ORDER BY wait_time_ms DESC
     """,
-})
+    }
+)
 
 
 def _rows_to_dicts(columns: list[str], rows: list) -> list[dict]:
     """Convert cursor rows to a list of dictionaries."""
-    return [
-        {col: str(val).strip() for col, val in zip(columns, row)}
-        for row in rows
-    ]
+    return [{col: str(val).strip() for col, val in zip(columns, row)} for row in rows]
 
 
 def _print_table(columns: list[str], rows: list) -> None:
@@ -122,23 +117,27 @@ def run_healthcheck(config_path: str):
             add_json_result("connectivity", "fail", {"server": server, "error": str(e)})
             flush_json()
         else:
-            console.print(Panel(
-                f"[bold red]FAIL[/]  Could not connect to {server}\n{e}",
-                title="Connectivity Check",
-            ))
+            console.print(
+                Panel(
+                    f"[bold red]FAIL[/]  Could not connect to {server}\n{e}",
+                    title="Connectivity Check",
+                )
+            )
         raise SystemExit(1)
 
     elapsed = time.time() - start
 
     if json_mode:
-        add_json_result("connectivity", "ok", {
-            "server": server, "latency_sec": round(elapsed, 3)
-        })
+        add_json_result(
+            "connectivity", "ok", {"server": server, "latency_sec": round(elapsed, 3)}
+        )
     else:
-        console.print(Panel(
-            f"[bold green]OK[/]  Connected to [cyan]{server}[/] in {elapsed:.3f}s",
-            title="Connectivity Check",
-        ))
+        console.print(
+            Panel(
+                f"[bold green]OK[/]  Connected to [cyan]{server}[/] in {elapsed:.3f}s",
+                title="Connectivity Check",
+            )
+        )
         console.print()
 
     cursor = conn.cursor()
@@ -181,9 +180,15 @@ def run_healthcheck(config_path: str):
 
     # --- Summary ---
     if json_mode:
-        add_json_result("summary", "complete", {
-            "passed": passed, "skipped": skipped, "server": server,
-        })
+        add_json_result(
+            "summary",
+            "complete",
+            {
+                "passed": passed,
+                "skipped": skipped,
+                "server": server,
+            },
+        )
         flush_json()
     else:
         console.rule("[bold]Summary[/]")

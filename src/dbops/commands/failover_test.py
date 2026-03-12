@@ -31,6 +31,7 @@ console = Console()
 # Version A: Write/Read validation (works on any SQL Server)
 # ---------------------------------------------------------------------------
 
+
 def _run_write_test(cursor, database: str) -> bool:
     """Create a temp table, insert a row, read it back, then clean up."""
     test_table = "dbops_failover_test"
@@ -211,6 +212,7 @@ def _print_ag_databases(db_states: list[dict]) -> None:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+
 def run_failover_test(
     config_path: str,
     database: str = "master",
@@ -226,10 +228,12 @@ def run_failover_test(
         conn = get_connection(config)
         conn.autocommit = True
     except Exception as e:
-        console.print(Panel(
-            f"[bold red]FAIL[/]  Could not connect\n{e}",
-            title="Failover Test",
-        ))
+        console.print(
+            Panel(
+                f"[bold red]FAIL[/]  Could not connect\n{e}",
+                title="Failover Test",
+            )
+        )
         raise SystemExit(1)
 
     cursor = conn.cursor()
@@ -245,9 +249,11 @@ def run_failover_test(
 
     console.print()
     if write_ok:
-        console.print(f"  [bold green]PASS[/]  Write/Read test completed in {elapsed:.3f}s")
+        console.print(
+            f"  [bold green]PASS[/]  Write/Read test completed in {elapsed:.3f}s"
+        )
     else:
-        console.print(f"  [bold red]FAIL[/]  Write/Read test failed")
+        console.print("  [bold red]FAIL[/]  Write/Read test failed")
         all_passed = False
     console.print()
 
@@ -257,7 +263,9 @@ def run_failover_test(
     replicas = _check_ag_status(cursor)
 
     if replicas is None:
-        console.print("  [dim]No Availability Groups configured. Skipping AG checks.[/]")
+        console.print(
+            "  [dim]No Availability Groups configured. Skipping AG checks.[/]"
+        )
     else:
         _print_ag_replicas(replicas)
         console.print()
@@ -290,7 +298,7 @@ def run_failover_test(
                     cursor.execute(FAILOVER_CMD.format(ag_name=ag_name))
                     while cursor.nextset():
                         pass
-                    console.print(f"  [bold green]Failover command executed[/]")
+                    console.print("  [bold green]Failover command executed[/]")
                     console.print("  Waiting 10s for role change...")
                     time.sleep(10)
 

@@ -87,7 +87,7 @@ def test_build_connection_string_no_options_uses_defaults(sample_config):
 def test_get_connection_calls_pyodbc(mock_connect, sample_config):
     """Verify get_connection calls pyodbc.connect with the right string."""
     mock_connect.return_value = MagicMock()
-    conn = get_connection(sample_config)
+    get_connection(sample_config)
     mock_connect.assert_called_once()
     call_args = mock_connect.call_args
     assert "DRIVER={ODBC Driver 18 for SQL Server}" in call_args[0][0]

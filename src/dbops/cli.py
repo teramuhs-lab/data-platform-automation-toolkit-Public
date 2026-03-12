@@ -88,8 +88,9 @@ def migrate(
     ),
 ):
     """Apply versioned SQL migrations and seed data to the target database."""
-    run_migrate(config, target_database=target_database,
-                dry_run=dry_run, run_tests=run_tests)
+    run_migrate(
+        config, target_database=target_database, dry_run=dry_run, run_tests=run_tests
+    )
 
 
 @app.command(name="drift-check")
@@ -114,8 +115,9 @@ def failover_test(
         "master", "--database", "-d", help="Database for write/read test"
     ),
     execute_failover: bool = typer.Option(
-        False, "--execute-failover",
-        help="Actually trigger AG failover (use with caution)"
+        False,
+        "--execute-failover",
+        help="Actually trigger AG failover (use with caution)",
     ),
 ):
     """Validate database functionality and AG failover readiness."""

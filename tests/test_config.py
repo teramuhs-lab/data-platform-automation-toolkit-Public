@@ -1,7 +1,6 @@
 """Tests for configuration loading."""
 
 import os
-import tempfile
 
 import pytest
 import yaml

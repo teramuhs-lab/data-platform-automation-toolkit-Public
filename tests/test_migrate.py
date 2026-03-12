@@ -2,7 +2,7 @@
 
 import hashlib
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -20,6 +20,7 @@ from dbops.commands.migrate import (
 # -------------------------------------------------------------------
 # _parse_script_name
 # -------------------------------------------------------------------
+
 
 class TestParseScriptName:
     def test_valid_versioned(self):
@@ -50,6 +51,7 @@ class TestParseScriptName:
 # _checksum
 # -------------------------------------------------------------------
 
+
 class TestChecksum:
     def test_returns_sha256(self, tmp_path):
         sql_file = tmp_path / "V001__test.sql"
@@ -71,6 +73,7 @@ class TestChecksum:
 # _get_applied_versions
 # -------------------------------------------------------------------
 
+
 class TestGetAppliedVersions:
     def test_returns_dict_of_version_checksum(self):
         cursor = MagicMock()
@@ -91,6 +94,7 @@ class TestGetAppliedVersions:
 # -------------------------------------------------------------------
 # _execute_sql_script
 # -------------------------------------------------------------------
+
 
 class TestExecuteSqlScript:
     def test_splits_on_go_and_executes_batches(self):
@@ -122,18 +126,22 @@ class TestExecuteSqlScript:
 # VERSION_PATTERN regex
 # -------------------------------------------------------------------
 
+
 class TestVersionPattern:
-    @pytest.mark.parametrize("filename,expected_match", [
-        ("V001__create_migration_tracking.sql", True),
-        ("V999__final.sql", True),
-        ("R001__seed_environments.sql", True),
-        ("V01__too_short.sql", False),
-        ("V0001__too_long.sql", False),
-        ("X001__wrong_prefix.sql", False),
-        ("V001_single_underscore.sql", False),
-        ("V001__no_extension", False),
-        ("readme.md", False),
-    ])
+    @pytest.mark.parametrize(
+        "filename,expected_match",
+        [
+            ("V001__create_migration_tracking.sql", True),
+            ("V999__final.sql", True),
+            ("R001__seed_environments.sql", True),
+            ("V01__too_short.sql", False),
+            ("V0001__too_long.sql", False),
+            ("X001__wrong_prefix.sql", False),
+            ("V001_single_underscore.sql", False),
+            ("V001__no_extension", False),
+            ("readme.md", False),
+        ],
+    )
     def test_pattern(self, filename, expected_match):
         match = VERSION_PATTERN.match(filename)
         assert bool(match) == expected_match
@@ -142,6 +150,7 @@ class TestVersionPattern:
 # -------------------------------------------------------------------
 # Migration directory constants
 # -------------------------------------------------------------------
+
 
 class TestConstants:
     def test_migration_dir_path(self):

@@ -1,8 +1,6 @@
 """Tests for the schema drift detection command."""
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from dbops.commands.drift_check import (
     _get_live_schemas,
@@ -15,6 +13,7 @@ from dbops.commands.drift_check import (
 # -------------------------------------------------------------------
 # EXPECTED_SCHEMA structure
 # -------------------------------------------------------------------
+
 
 class TestExpectedSchema:
     def test_has_schemas(self):
@@ -45,6 +44,7 @@ class TestExpectedSchema:
 # _get_live_schemas
 # -------------------------------------------------------------------
 
+
 class TestGetLiveSchemas:
     def test_returns_schema_names(self):
         cursor = MagicMock()
@@ -62,6 +62,7 @@ class TestGetLiveSchemas:
 # -------------------------------------------------------------------
 # _get_live_tables
 # -------------------------------------------------------------------
+
 
 class TestGetLiveTables:
     def test_returns_tables_with_columns(self):
@@ -87,6 +88,7 @@ class TestGetLiveTables:
 # -------------------------------------------------------------------
 # _get_live_procedures
 # -------------------------------------------------------------------
+
 
 class TestGetLiveProcedures:
     def test_returns_procedure_names(self):
