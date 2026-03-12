@@ -1,37 +1,52 @@
 # Data Platform Automation Toolkit
 
-A production-grade **Database DevOps CLI** built in Python for automating SQL Server operations -- health checks, backups, restores, and failover validation.
+A production-grade **Database DevOps CLI** built in Python for automating SQL Server operations -- CI/CD pipelines, schema migrations, drift detection, health checks, backups, restores, and failover validation.
 
-Built for DBAs and DevOps engineers who need reliable, repeatable database automation instead of ad-hoc scripts.
+Built for DBAs transitioning into Database DevOps Engineering who need to demonstrate CI/CD for SQL Server using real-world patterns across Azure DevOps, GitLab CI, and GitHub Actions.
 
 ## The Problem
 
 Database operations in most organizations are manual, error-prone, and undocumented:
 
+- Schema changes are applied by hand directly in production
+- There's no version control for database objects
 - Health checks are run by hand (or not at all)
 - Backups succeed but are never verified
-- Restores are tested only during actual disasters
-- Failover readiness is assumed, not validated
+- Nobody knows if the live schema matches what's in source control (drift)
+- CI/CD exists for application code but not for the database
 
-This toolkit automates all of it through a single CLI with structured output, file logging, and JSON mode for CI/CD integration.
+This toolkit solves all of it through a single CLI with versioned migrations, automated testing, drift detection, and multi-platform CI/CD pipelines.
 
 ## Features
 
 | Command | What it does |
 |---------|-------------|
+| `dbops migrate` | Apply versioned SQL migrations + seed data with checksum tracking |
+| `dbops drift-check` | Detect schema drift between source control and live database |
 | `dbops healthcheck` | Server identity, database states, disk space, AG status, top wait stats |
 | `dbops backup` | Full backup with `COMPRESSION`, `CHECKSUM`, and `RESTORE VERIFYONLY` |
 | `dbops restore` | Restore with auto `WITH MOVE`, target naming, and status verification |
 | `dbops failover-test` | Write/read validation + AG replica health + optional failover trigger |
 
+**CI/CD Pipelines (all three included):**
+
+| Platform | File | Stages |
+|----------|------|--------|
+| **Azure DevOps** | `pipelines/azure-pipelines.yml` | Build → Deploy Dev → Deploy Staging (approval) → Deploy Prod (approval) |
+| **GitLab CI** | `.gitlab-ci.yml` | Validate → Build → Deploy Dev → Test DB → Deploy Staging (manual) → Deploy Prod (manual) |
+| **GitHub Actions** | `.github/workflows/ci.yml` | Validate → Build → Deploy Dev → Deploy Staging (environment protection) → Deploy Prod (environment protection) |
+
 **Additional capabilities:**
 
+- **Schema as Code** -- SQL migrations versioned in git with naming conventions
+- **Database Testing** -- SQL validation scripts run post-deploy in the pipeline
+- **Drift Detection** -- Compare live schema against source-controlled migrations
+- **Seed Data Management** -- Reference data managed as repeatable scripts via MERGE
 - **Rich console output** -- Tables, panels, and color-coded status icons
 - **File logging** -- Every run logged to `./logs/dbops.log`
 - **JSON mode** -- `dbops --json healthcheck` for machine-readable output
-- **YAML config** -- Environment-specific settings (dev/prod/docker)
+- **YAML config** -- Environment-specific settings (dev/staging/prod/docker)
 - **Docker support** -- Containerized CLI + SQL Server 2022 dev environment
-- **CI/CD pipeline** -- GitHub Actions with tests, linting, and Docker build
 
 ## Quick Start
 
@@ -52,103 +67,187 @@ docker compose --env-file .env.example -f docker/docker-compose.yml up -d
 
 This spins up SQL Server 2022 Developer Edition on `localhost:1433`.
 
-### 3. Run a health check
+### 3. Run migrations
+
+```bash
+# Dry run — see what would be applied
+DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops migrate --dry-run
+
+# Apply migrations + seed data to a database
+DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops migrate --database dbops_dev
+
+# Apply migrations + run database tests
+DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops migrate --database dbops_dev --test
+```
+
+### 4. Check for drift
+
+```bash
+DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops drift-check --database dbops_dev
+```
+
+### 5. Run a health check
 
 ```bash
 DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops healthcheck
 ```
 
-Output:
+## Database CI/CD Architecture
+
+This is the core of the project — how database changes flow from a developer's branch to production:
 
 ```
-Connectivity Check: OK  Connected to 127.0.0.1,1433 in 0.05s
-
-Server Identity
- server_name   | server_version
- ee5c1fca0e7c  | Microsoft SQL Server 2022 (RTM-CU23)
-
-Database List
- name    | status  | recovery_model | size_mb
- master  | ONLINE  | SIMPLE         | 6.25
- model   | ONLINE  | FULL           | 16.00
- msdb    | ONLINE  | SIMPLE         | 16.56
- tempdb  | ONLINE  | SIMPLE         | 72.00
-
-Disk Space
- drive | MB free
- C     | 880244
-
-Health check complete.
+Developer writes SQL migration (V006__add_audit_table.sql)
+         │
+         ▼
+┌─────────────────────────────────┐
+│  PR / Push to main              │
+│  ┌───────────────────────────┐  │
+│  │ Validate                  │  │
+│  │  • Lint Python code       │  │
+│  │  • Check SQL naming       │  │
+│  │  • Run unit tests (59)    │  │
+│  │  • Build Docker image     │  │
+│  └──────────┬────────────────┘  │
+│             ▼                   │
+│  ┌───────────────────────────┐  │
+│  │ Deploy Dev (automatic)    │  │
+│  │  • dbops migrate --dry-run│  │
+│  │  • dbops migrate          │  │
+│  │  • dbops migrate --test   │  │
+│  │  • dbops drift-check      │  │
+│  │  • dbops healthcheck      │  │
+│  └──────────┬────────────────┘  │
+│             ▼                   │
+│  ┌───────────────────────────┐  │
+│  │ Deploy Staging (approval) │  │
+│  │  • Same steps as dev      │  │
+│  │  • Manual approval gate   │  │
+│  └──────────┬────────────────┘  │
+│             ▼                   │
+│  ┌───────────────────────────┐  │
+│  │ Deploy Prod (approval)    │  │
+│  │  • Same steps as staging  │  │
+│  │  • Manual approval gate   │  │
+│  │  • Post-deploy healthcheck│  │
+│  └───────────────────────────┘  │
+└─────────────────────────────────┘
 ```
+
+### Migration Conventions
+
+| Prefix | Pattern | Behavior |
+|--------|---------|----------|
+| `V` | `V001__create_tables.sql` | **Versioned** — runs once, tracked by SHA-256 checksum |
+| `R` | `R001__seed_environments.sql` | **Repeatable** — re-runs every deploy (uses MERGE for idempotency) |
+
+### What Gets Tested in the Pipeline
+
+1. **Python unit tests** (59 tests) — CLI logic, config loading, migration parsing, drift detection
+2. **SQL naming validation** — enforces `V###__description.sql` convention
+3. **Database schema tests** — verify all tables, columns, FKs, and stored procedures exist post-migration
+4. **Data integrity tests** — verify constraints, defaults, and computed columns work correctly
+5. **Drift detection** — confirm live schema matches source control after deploy
 
 ## Command Examples
 
 ```bash
-# Health check (default config)
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops healthcheck
+# ----- Migrations -----
+# Dry run (preview changes)
+dbops migrate --dry-run
 
-# Health check with JSON output (for CI/CD)
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops --json healthcheck
+# Apply to specific database
+dbops migrate --database dbops_dev
 
-# Backup a specific database
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops backup --database MyDB
+# Apply + run DB tests
+dbops migrate --database dbops_dev --test
 
-# Backup all user databases
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops backup
+# Use staging config
+dbops migrate --config config/env-staging.yml --database dbops_staging
 
-# Backup without verification
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops backup --database MyDB --no-verify
+# ----- Drift Detection -----
+dbops drift-check --database dbops_dev
 
-# Restore to a new database
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops restore -f /backups/MyDB_20260308.bak -t MyDB_Dev
+# ----- Health Check -----
+dbops healthcheck
+dbops --json healthcheck    # JSON output for CI/CD
 
-# Restore with overwrite
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops restore -f /backups/MyDB_20260308.bak -t MyDB_Dev --replace
+# ----- Backups -----
+dbops backup --database MyDB
+dbops backup                # all user databases
+dbops backup --database MyDB --no-verify
 
-# Failover validation (write/read test + AG check)
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops failover-test --database MyDB
+# ----- Restore -----
+dbops restore -f /backups/MyDB_20260308.bak -t MyDB_Dev
+dbops restore -f /backups/MyDB_20260308.bak -t MyDB_Dev --replace
 
-# Use a different config
-DBOPS_SQL_PASSWORD=DevStr0ngPass2026 dbops healthcheck --config config/env-prod.yml
+# ----- Failover -----
+dbops failover-test --database MyDB
+
+# ----- Config override -----
+dbops healthcheck --config config/env-prod.yml
 ```
 
 ## Project Structure
 
 ```
 data-platform-automation-toolkit/
-├── .github/workflows/ci.yml    # GitHub Actions CI pipeline
-├── .env.example                # Password + env vars (single source of truth)
-├── pyproject.toml              # Python project config (Typer, PyYAML, pyodbc, Rich)
+├── .github/workflows/ci.yml       # GitHub Actions: full DB CI/CD pipeline
+├── .gitlab-ci.yml                  # GitLab CI: full DB CI/CD pipeline
+├── pipelines/
+│   └── azure-pipelines.yml         # Azure DevOps: full DB CI/CD pipeline
+│
+├── database/
+│   ├── migrations/                 # Versioned SQL migrations (V###__)
+│   │   ├── V001__create_migration_tracking.sql
+│   │   ├── V002__create_inventory_schema.sql
+│   │   ├── V003__create_backup_history.sql
+│   │   ├── V004__create_alert_rules.sql
+│   │   └── V005__add_stored_procedures.sql
+│   ├── seed-data/                  # Repeatable reference data (R###__)
+│   │   ├── R001__seed_environments.sql
+│   │   └── R002__seed_alert_rules.sql
+│   └── tests/                      # SQL validation scripts for CI
+│       ├── test_schema_validation.sql
+│       └── test_data_integrity.sql
 │
 ├── docker/
-│   ├── Dockerfile              # Containerized dbops CLI with ODBC Driver 18
-│   └── docker-compose.yml      # SQL Server 2022 + dbops
+│   ├── Dockerfile                  # Containerized dbops CLI with ODBC Driver 18
+│   └── docker-compose.yml          # SQL Server 2022 + dbops
 │
 ├── config/
-│   ├── env-dev.yml             # Dev: localhost, debug logging
-│   ├── env-prod.yml            # Prod: trusted connections, retention policies
-│   └── env-docker.yml          # Docker: container-to-container networking
+│   ├── env-dev.yml                 # Dev: localhost, debug logging
+│   ├── env-staging.yml             # Staging: encrypted connections
+│   ├── env-prod.yml                # Prod: trusted connections, retention policies
+│   └── env-docker.yml              # Docker: container-to-container networking
 │
 ├── src/dbops/
-│   ├── cli.py                  # Typer CLI with 4 subcommands
-│   ├── config.py               # YAML loader + env var resolution
-│   ├── db.py                   # pyodbc connection string builder
-│   ├── logging.py              # Rich console + file log + JSON mode
+│   ├── cli.py                      # Typer CLI with 6 subcommands
+│   ├── config.py                   # YAML loader + env var resolution
+│   ├── db.py                       # pyodbc connection string builder
+│   ├── logging.py                  # Rich console + file log + JSON mode
 │   └── commands/
-│       ├── healthcheck.py      # 6 diagnostic queries
-│       ├── backup.py           # BACKUP DATABASE with VERIFYONLY
-│       ├── restore.py          # RESTORE with auto WITH MOVE
-│       └── failover_test.py    # Write/read test + AG validation
+│       ├── migrate.py              # Migration runner (Flyway-style)
+│       ├── drift_check.py          # Schema drift detection
+│       ├── healthcheck.py          # 6 diagnostic queries
+│       ├── backup.py               # BACKUP DATABASE with VERIFYONLY
+│       ├── restore.py              # RESTORE with auto WITH MOVE
+│       └── failover_test.py        # Write/read test + AG validation
 │
-└── tests/
-    ├── test_config.py          # 7 tests: config loading + env resolution
-    ├── test_db.py              # 11 tests: connection string builder
-    └── test_healthcheck.py     # 7 tests: mocked DB healthcheck
+├── tests/                          # 59 unit tests
+│   ├── test_config.py              # Config loading + env resolution
+│   ├── test_db.py                  # Connection string builder
+│   ├── test_healthcheck.py         # Mocked DB healthcheck
+│   ├── test_migrate.py             # Migration parsing, checksums, GO splitting
+│   └── test_drift_check.py         # Expected schema + live catalog queries
+│
+├── .env.example                    # Password + env vars template
+└── pyproject.toml                  # Python project config
 ```
 
 ## Configuration
 
-Secrets live in `.env.example` (never hardcoded in config files):
+Secrets live in `.env` (never hardcoded in config files):
 
 ```
 DBOPS_SQL_PASSWORD=DevStr0ngPass2026
@@ -167,17 +266,20 @@ For a detailed walkthrough of every design decision, implementation step, and th
 
 **[docs/architecture.md](docs/architecture.md)**
 
-This document covers all 15 build steps, from repository initialization through CI/CD pipeline setup, and explains why this project demonstrates Database DevOps expertise.
+## CI/CD Pipeline Comparison
 
-## CI/CD
+All three pipelines implement the same deployment lifecycle, so you can compare platform syntax side-by-side:
 
-GitHub Actions pipeline runs on every push/PR to `main`:
-
-| Job | What it does |
-|-----|-------------|
-| **test** | `pytest` on Python 3.11 + 3.12 with coverage |
-| **lint** | `ruff check` + `ruff format --check` |
-| **docker** | Build image + verify CLI runs |
+| Concept | Azure DevOps | GitLab CI | GitHub Actions |
+|---------|-------------|-----------|----------------|
+| **Config file** | `azure-pipelines.yml` | `.gitlab-ci.yml` | `.github/workflows/ci.yml` |
+| **Stages** | `stages:` | `stages:` | Jobs with `needs:` |
+| **Environment protection** | Environment approvals | Protected environments | Environment protection rules |
+| **Manual gates** | Environment checks | `when: manual` | Required reviewers |
+| **Secrets** | Variable groups | CI/CD Variables | Repository secrets |
+| **Artifacts** | `PublishPipelineArtifact` | `artifacts:` | `actions/upload-artifact` |
+| **Test reporting** | `PublishTestResults` | `reports: junit:` | Upload artifact |
+| **Docker build** | `Docker@2` task | `docker:dind` service | Direct `docker build` |
 
 ## Tech Stack
 
@@ -187,8 +289,8 @@ GitHub Actions pipeline runs on every push/PR to `main`:
 - **pyodbc** -- SQL Server connectivity via ODBC Driver 18
 - **PyYAML** -- Environment configuration
 - **Docker** -- Containerized SQL Server 2022 + CLI image
-- **pytest** -- 25 unit tests with mocked DB calls
-- **GitHub Actions** -- CI/CD pipeline
+- **pytest** -- 59 unit tests with mocked DB calls
+- **Azure DevOps / GitLab CI / GitHub Actions** -- CI/CD pipelines
 
 ## Roadmap
 
@@ -200,6 +302,8 @@ GitHub Actions pipeline runs on every push/PR to `main`:
 - [ ] Prometheus metrics endpoint for monitoring integration
 - [ ] Interactive TUI dashboard for real-time server status
 - [ ] Azure Key Vault integration for secrets management
+- [ ] Kubernetes deployment manifests
+- [ ] Rollback migration support (U### prefix)
 
 ## License
 

@@ -1,0 +1,16 @@
+# Staging environment configuration
+environment: staging
+sql:
+  driver: "ODBC Driver 18 for SQL Server"
+  server: "${DB_HOST_STAGING}"
+  database: "master"
+  username: "sa"
+  password_env: "DBOPS_SQL_PASSWORD"
+options:
+  encrypt: true
+  trust_server_certificate: true
+  connection_timeout: 15
+backup:
+  backup_dir: "/backups"
+  compression: true
+  verify: true

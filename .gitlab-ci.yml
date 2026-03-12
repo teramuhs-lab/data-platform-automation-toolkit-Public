@@ -1,0 +1,209 @@
+# =============================================
+# GitLab CI Pipeline: SQL Server Database CI/CD
+# =============================================
+# Same deployment lifecycle as the Azure DevOps pipeline:
+#   Validate → Build → Deploy Dev → Test DB → Deploy Staging → Deploy Prod
+#
+# Prerequisites in GitLab:
+#   - CI/CD Variables: DBOPS_SQL_PASSWORD (masked, protected)
+#   - Protected environments for staging and prod (with approvals)
+#   - Runner with Docker support
+#
+# Learn more:
+#   - Stages:       https://docs.gitlab.com/ee/ci/yaml/#stages
+#   - Environments: https://docs.gitlab.com/ee/ci/environments/
+#   - Rules:        https://docs.gitlab.com/ee/ci/yaml/#rules
+
+stages:
+  - validate
+  - build
+  - deploy-dev
+  - test-db
+  - deploy-staging
+  - deploy-prod
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PYTHON_VERSION: "3.12"
+
+# Reusable hidden job for Python setup
+.python-setup: &python-setup
+  image: python:${PYTHON_VERSION}-slim
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/pip
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install -e .
+
+# -----------------------------------------------
+# Stage: Validate
+# -----------------------------------------------
+lint:
+  stage: validate
+  image: python:${PYTHON_VERSION}-slim
+  script:
+    - pip install ruff
+    - ruff check src/ tests/
+    - ruff format --check src/ tests/
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+validate-sql-naming:
+  stage: validate
+  image: alpine:latest
+  script:
+    - |
+      echo "Validating migration script naming convention..."
+      for f in database/migrations/*.sql; do
+        basename=$(basename "$f")
+        if ! echo "$basename" | grep -qE '^V[0-9]{3}__.+\.sql$'; then
+          echo "ERROR: Invalid migration name: $basename"
+          echo "Expected: V###__description.sql"
+          exit 1
+        fi
+      done
+      echo "All migration scripts follow naming convention."
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - changes:
+        - database/**
+
+unit-tests:
+  stage: validate
+  <<: *python-setup
+  script:
+    - pip install pytest pytest-cov
+    - pytest tests/ -v --tb=short
+        --junitxml=report.xml
+        --cov=dbops --cov-report=xml:coverage.xml
+        --cov-report=term-missing
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------
+# Stage: Build
+# -----------------------------------------------
+docker-build:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - docker build -f docker/Dockerfile -t dbops:${CI_COMMIT_SHORT_SHA} .
+    - docker run --rm dbops:${CI_COMMIT_SHORT_SHA} --help
+    # In production, push to GitLab Container Registry:
+    # - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    # - docker tag dbops:${CI_COMMIT_SHORT_SHA} $CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}
+    # - docker push $CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------
+# Stage: Deploy Dev (automatic)
+# -----------------------------------------------
+migrate-dev:
+  stage: deploy-dev
+  <<: *python-setup
+  environment:
+    name: dev
+    url: https://dev.example.com             # Replace with actual URL
+  variables:
+    TARGET_CONFIG: "config/env-dev.yml"
+    TARGET_DB: "dbops_dev"
+  script:
+    # Dry run — preview changes
+    - dbops migrate --config $TARGET_CONFIG --database $TARGET_DB --dry-run
+    # Apply migrations + seed data
+    - dbops migrate --config $TARGET_CONFIG --database $TARGET_DB
+    # Post-deploy drift check
+    - dbops drift-check --config $TARGET_CONFIG --database $TARGET_DB
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - database/**
+        - src/**
+
+# -----------------------------------------------
+# Stage: Database Tests (against dev)
+# -----------------------------------------------
+db-tests-dev:
+  stage: test-db
+  <<: *python-setup
+  environment:
+    name: dev
+  variables:
+    TARGET_CONFIG: "config/env-dev.yml"
+    TARGET_DB: "dbops_dev"
+  script:
+    # Run DB-level tests (schema validation + data integrity)
+    - dbops migrate --config $TARGET_CONFIG --database $TARGET_DB --test
+    # Health check
+    - dbops healthcheck --config $TARGET_CONFIG
+  needs:
+    - migrate-dev
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------
+# Stage: Deploy Staging (manual approval)
+# -----------------------------------------------
+migrate-staging:
+  stage: deploy-staging
+  <<: *python-setup
+  environment:
+    name: staging
+    url: https://staging.example.com
+  variables:
+    TARGET_CONFIG: "config/env-staging.yml"
+    TARGET_DB: "dbops_staging"
+  script:
+    - dbops migrate --config $TARGET_CONFIG --database $TARGET_DB --dry-run
+    - dbops migrate --config $TARGET_CONFIG --database $TARGET_DB --test
+    - dbops drift-check --config $TARGET_CONFIG --database $TARGET_DB
+  needs:
+    - db-tests-dev
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual                           # ← Requires manual click to deploy
+      allow_failure: false
+
+# -----------------------------------------------
+# Stage: Deploy Production (manual approval)
+# -----------------------------------------------
+migrate-prod:
+  stage: deploy-prod
+  <<: *python-setup
+  environment:
+    name: production
+    url: https://prod.example.com
+  variables:
+    TARGET_CONFIG: "config/env-prod.yml"
+    TARGET_DB: "dbops_prod"
+  script:
+    - echo "=== PRODUCTION DEPLOYMENT ==="
+    - dbops migrate --config $TARGET_CONFIG --database $TARGET_DB --dry-run
+    - dbops migrate --config $TARGET_CONFIG --database $TARGET_DB --test
+    - dbops drift-check --config $TARGET_CONFIG --database $TARGET_DB
+    - dbops healthcheck --config $TARGET_CONFIG
+  needs:
+    - migrate-staging
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual                           # ← Requires manual click to deploy
+      allow_failure: false
+  # In GitLab Premium/Ultimate, use protected environments for approval gates

@@ -1,0 +1,457 @@
+# =============================================
+# Azure DevOps Pipeline: SQL Server Database CI/CD
+# =============================================
+# This pipeline demonstrates a full database deployment lifecycle:
+#   Build → Validate → Deploy Dev → Test → Deploy Staging → Gate → Deploy Prod
+#
+# Uses PowerShell throughout — the native scripting language for
+# Azure DevOps + SQL Server environments. This is intentional:
+# real Azure/SQL shops run Windows agents with PowerShell.
+#
+# Prerequisites in Azure DevOps:
+#   - Variable group "dbops-secrets" with DBOPS_SQL_PASSWORD
+#   - Service connections for each environment
+#   - Environment approvals configured for staging and prod
+#
+# Learn more:
+#   - Pipeline stages: https://learn.microsoft.com/en-us/azure/devops/pipelines/process/stages
+#   - Environments:    https://learn.microsoft.com/en-us/azure/devops/pipelines/process/environments
+#   - Templates:       https://learn.microsoft.com/en-us/azure/devops/pipelines/process/templates
+
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+  paths:
+    include:
+      - database/**
+      - src/**
+      - pipelines/**
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  - group: dbops-secrets                    # Contains DBOPS_SQL_PASSWORD
+  - name: pythonVersion
+    value: '3.12'
+  - name: vmImage
+    value: 'windows-latest'                 # Windows agents — native PowerShell + SQL Server tools
+
+# -----------------------------------------------
+# Stage 1: Build & Validate (runs on every push)
+# -----------------------------------------------
+stages:
+  - stage: Build
+    displayName: 'Build & Validate'
+    jobs:
+      - job: Lint
+        displayName: 'Lint Python & Validate SQL'
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+            displayName: 'Set up Python'
+
+          - pwsh: |
+              python -m pip install --upgrade pip
+              pip install ruff
+            displayName: 'Install linter'
+
+          - pwsh: |
+              ruff check src/ tests/
+              if ($LASTEXITCODE -ne 0) { exit 1 }
+            displayName: 'Ruff lint check'
+
+          - pwsh: |
+              ruff format --check src/ tests/
+              if ($LASTEXITCODE -ne 0) { exit 1 }
+            displayName: 'Ruff format check'
+
+          # Validate SQL files have correct naming convention
+          - pwsh: |
+              Write-Host "Validating migration script naming convention..."
+              $errors = 0
+              $migrations = Get-ChildItem -Path "database/migrations" -Filter "*.sql"
+
+              foreach ($file in $migrations) {
+                  if ($file.Name -notmatch '^V\d{3}__.+\.sql$') {
+                      Write-Error "Invalid migration name: $($file.Name) — expected pattern: V###__description.sql"
+                      $errors++
+                  }
+              }
+
+              if ($errors -gt 0) {
+                  Write-Error "$errors migration script(s) have invalid names."
+                  exit 1
+              }
+
+              Write-Host "All $($migrations.Count) migration scripts follow naming convention." -ForegroundColor Green
+            displayName: 'Validate SQL naming convention'
+
+          # Validate seed data naming
+          - pwsh: |
+              Write-Host "Validating seed data script naming..."
+              $seeds = Get-ChildItem -Path "database/seed-data" -Filter "*.sql"
+
+              foreach ($file in $seeds) {
+                  if ($file.Name -notmatch '^R\d{3}__.+\.sql$') {
+                      Write-Error "Invalid seed script name: $($file.Name) — expected pattern: R###__description.sql"
+                      exit 1
+                  }
+              }
+
+              Write-Host "All $($seeds.Count) seed scripts follow naming convention." -ForegroundColor Green
+            displayName: 'Validate seed data naming convention'
+
+      - job: UnitTests
+        displayName: 'Python Unit Tests'
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+
+          - pwsh: |
+              python -m pip install --upgrade pip
+              pip install -e .
+              pip install pytest pytest-cov pytest-junitxml
+            displayName: 'Install dependencies'
+
+          - pwsh: |
+              $artifactDir = "$(Build.ArtifactStagingDirectory)"
+              pytest tests/ -v --tb=short `
+                --junitxml="$artifactDir/test-results.xml" `
+                --cov=dbops `
+                --cov-report=xml:"$artifactDir/coverage.xml" `
+                --cov-report=term-missing
+              if ($LASTEXITCODE -ne 0) { exit 1 }
+            displayName: 'Run unit tests'
+
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '$(Build.ArtifactStagingDirectory)/test-results.xml'
+            condition: always()
+            displayName: 'Publish test results'
+
+          - task: PublishCodeCoverageResults@2
+            inputs:
+              summaryFileLocation: '$(Build.ArtifactStagingDirectory)/coverage.xml'
+            condition: always()
+            displayName: 'Publish coverage'
+
+      - job: DockerBuild
+        displayName: 'Build Docker Image'
+        pool:
+          vmImage: 'ubuntu-latest'           # Docker build stays on Linux
+        dependsOn: UnitTests
+        steps:
+          - pwsh: |
+              docker build -f docker/Dockerfile -t "dbops:$(Build.BuildId)" .
+              docker run --rm "dbops:$(Build.BuildId)" --help
+              if ($LASTEXITCODE -ne 0) { exit 1 }
+            displayName: 'Build and verify Docker image'
+
+          # In a real pipeline, push to ACR:
+          # - task: Docker@2
+          #   inputs:
+          #     containerRegistry: 'your-acr-connection'
+          #     repository: 'dbops'
+          #     command: 'buildAndPush'
+          #     Dockerfile: 'docker/Dockerfile'
+          #     tags: |
+          #       $(Build.BuildId)
+          #       latest
+
+      - job: PublishArtifacts
+        displayName: 'Publish Pipeline Artifacts'
+        pool:
+          vmImage: $(vmImage)
+        dependsOn: [Lint, UnitTests]
+        steps:
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: 'database/'
+              artifact: 'database-scripts'
+            displayName: 'Publish SQL scripts'
+
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: 'config/'
+              artifact: 'config'
+            displayName: 'Publish config files'
+
+  # -----------------------------------------------
+  # Stage 2: Deploy to Dev (automatic on main)
+  # -----------------------------------------------
+  - stage: DeployDev
+    displayName: 'Deploy to Dev'
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    variables:
+      - name: targetConfig
+        value: 'config/env-dev.yml'
+      - name: targetDB
+        value: 'dbops_dev'
+    jobs:
+      - deployment: DeployDevDB
+        displayName: 'Deploy Dev Database'
+        pool:
+          vmImage: $(vmImage)
+        environment: 'dbops-dev'            # No approval gate for dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: $(pythonVersion)
+
+                - pwsh: |
+                    python -m pip install --upgrade pip
+                    pip install -e .
+                  displayName: 'Install dbops CLI'
+
+                # Dry run first — see what will change
+                - pwsh: |
+                    Write-Host "=== Migration Dry Run ===" -ForegroundColor Cyan
+                    dbops migrate `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)" `
+                      --dry-run
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Migration dry run failed."
+                        exit 1
+                    }
+                  displayName: 'Migration dry run'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+                # Apply migrations + seed data + run DB tests
+                - pwsh: |
+                    Write-Host "=== Applying Migrations ===" -ForegroundColor Cyan
+                    dbops migrate `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)" `
+                      --test
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Migration failed."
+                        exit 1
+                    }
+                    Write-Host "Migrations applied successfully." -ForegroundColor Green
+                  displayName: 'Apply migrations & run DB tests'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+                # Drift check — should be clean right after deploy
+                - pwsh: |
+                    Write-Host "=== Post-Deploy Drift Check ===" -ForegroundColor Cyan
+                    dbops drift-check `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)"
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Schema drift detected after deployment!"
+                        exit 1
+                    }
+                    Write-Host "No drift detected." -ForegroundColor Green
+                  displayName: 'Post-deploy drift check'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+                # Healthcheck — verify the database is operational
+                - pwsh: |
+                    Write-Host "=== Post-Deploy Health Check ===" -ForegroundColor Cyan
+                    dbops healthcheck --config "$(targetConfig)"
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Health check failed after deployment."
+                        exit 1
+                    }
+                  displayName: 'Post-deploy health check'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+  # -----------------------------------------------
+  # Stage 3: Deploy to Staging (manual approval)
+  # -----------------------------------------------
+  - stage: DeployStaging
+    displayName: 'Deploy to Staging'
+    dependsOn: DeployDev
+    condition: succeeded()
+    variables:
+      - name: targetConfig
+        value: 'config/env-staging.yml'
+      - name: targetDB
+        value: 'dbops_staging'
+    jobs:
+      - deployment: DeployStagingDB
+        displayName: 'Deploy Staging Database'
+        pool:
+          vmImage: $(vmImage)
+        environment: 'dbops-staging'        # ← Configure approval gate in Azure DevOps
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: $(pythonVersion)
+
+                - pwsh: |
+                    pip install -e .
+                  displayName: 'Install dbops CLI'
+
+                - pwsh: |
+                    Write-Host "=== Staging: Migration Dry Run ===" -ForegroundColor Cyan
+                    dbops migrate `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)" `
+                      --dry-run
+                    if ($LASTEXITCODE -ne 0) { exit 1 }
+                  displayName: 'Migration dry run'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+                - pwsh: |
+                    Write-Host "=== Staging: Applying Migrations ===" -ForegroundColor Cyan
+                    dbops migrate `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)" `
+                      --test
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Staging migration failed."
+                        exit 1
+                    }
+                    Write-Host "Staging migrations applied successfully." -ForegroundColor Green
+                  displayName: 'Apply migrations & run DB tests'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+                - pwsh: |
+                    dbops drift-check `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)"
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Schema drift detected in staging!"
+                        exit 1
+                    }
+                    Write-Host "Staging: No drift detected." -ForegroundColor Green
+                  displayName: 'Post-deploy drift check'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+  # -----------------------------------------------
+  # Stage 4: Deploy to Production (manual approval)
+  # -----------------------------------------------
+  - stage: DeployProd
+    displayName: 'Deploy to Production'
+    dependsOn: DeployStaging
+    condition: succeeded()
+    variables:
+      - name: targetConfig
+        value: 'config/env-prod.yml'
+      - name: targetDB
+        value: 'dbops_prod'
+    jobs:
+      - deployment: DeployProdDB
+        displayName: 'Deploy Production Database'
+        pool:
+          vmImage: $(vmImage)
+        environment: 'dbops-prod'           # ← Configure approval gate + checks
+        strategy:
+          runOnce:
+            preDeploy:
+              steps:
+                - pwsh: |
+                    Write-Host "============================================" -ForegroundColor Yellow
+                    Write-Host "  PRODUCTION DEPLOYMENT" -ForegroundColor Yellow
+                    Write-Host "  Review migration plan in build artifacts" -ForegroundColor Yellow
+                    Write-Host "  before approving this stage." -ForegroundColor Yellow
+                    Write-Host "============================================" -ForegroundColor Yellow
+                  displayName: 'Pre-deploy reminder'
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: $(pythonVersion)
+
+                - pwsh: |
+                    pip install -e .
+                  displayName: 'Install dbops CLI'
+
+                # Production: always dry run first
+                - pwsh: |
+                    Write-Host "=== PROD: Migration Dry Run ===" -ForegroundColor Yellow
+                    Write-Host "Review the output below carefully." -ForegroundColor Yellow
+                    dbops migrate `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)" `
+                      --dry-run
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Production dry run failed — aborting."
+                        exit 1
+                    }
+                  displayName: 'Migration dry run (review output)'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+                - pwsh: |
+                    Write-Host "=== PROD: Applying Migrations ===" -ForegroundColor Yellow
+                    dbops migrate `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)" `
+                      --test
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "PRODUCTION MIGRATION FAILED — investigate immediately."
+                        exit 1
+                    }
+                    Write-Host "Production migrations applied successfully." -ForegroundColor Green
+                  displayName: 'Apply migrations & validate'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+                - pwsh: |
+                    dbops drift-check `
+                      --config "$(targetConfig)" `
+                      --database "$(targetDB)"
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Schema drift detected in production!"
+                        exit 1
+                    }
+                    Write-Host "Production: No drift detected." -ForegroundColor Green
+                  displayName: 'Post-deploy drift check'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+                - pwsh: |
+                    Write-Host "=== PROD: Health Check ===" -ForegroundColor Yellow
+                    dbops healthcheck --config "$(targetConfig)"
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Production health check FAILED after deployment."
+                        exit 1
+                    }
+                    Write-Host "Production health check passed." -ForegroundColor Green
+                  displayName: 'Production health check'
+                  env:
+                    DBOPS_SQL_PASSWORD: $(DBOPS_SQL_PASSWORD)
+
+            postRouteTraffic:
+              steps:
+                - pwsh: |
+                    Write-Host "============================================" -ForegroundColor Green
+                    Write-Host "  Production deployment complete." -ForegroundColor Green
+                    Write-Host "  Monitor dashboards for anomalies." -ForegroundColor Green
+                    Write-Host "============================================" -ForegroundColor Green
+                  displayName: 'Post-deploy notification'

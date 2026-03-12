@@ -3,8 +3,10 @@
 import typer
 
 from dbops.commands.backup import run_backup
+from dbops.commands.drift_check import run_drift_check
 from dbops.commands.failover_test import run_failover_test
 from dbops.commands.healthcheck import run_healthcheck
+from dbops.commands.migrate import run_migrate
 from dbops.commands.restore import run_restore
 from dbops.logging import set_json_mode
 
@@ -68,6 +70,39 @@ def restore(
 ):
     """Restore a database from a backup file with WITH MOVE support."""
     run_restore(config, backup_file=backup_file, target=target, replace=replace)
+
+
+@app.command()
+def migrate(
+    config: str = typer.Option(
+        "config/env-dev.yml", "--config", "-c", help="Path to YAML config file"
+    ),
+    target_database: str = typer.Option(
+        None, "--database", "-d", help="Target database (overrides config)"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be applied without executing"
+    ),
+    run_tests: bool = typer.Option(
+        False, "--test", help="Run database tests after migration"
+    ),
+):
+    """Apply versioned SQL migrations and seed data to the target database."""
+    run_migrate(config, target_database=target_database,
+                dry_run=dry_run, run_tests=run_tests)
+
+
+@app.command(name="drift-check")
+def drift_check(
+    config: str = typer.Option(
+        "config/env-dev.yml", "--config", "-c", help="Path to YAML config file"
+    ),
+    target_database: str = typer.Option(
+        None, "--database", "-d", help="Target database (overrides config)"
+    ),
+):
+    """Detect schema drift between source-controlled migrations and live database."""
+    run_drift_check(config, target_database=target_database)
 
 
 @app.command(name="failover-test")
