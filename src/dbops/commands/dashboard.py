@@ -159,11 +159,11 @@ class DashboardApp(App):
         try:
             conn = get_connection(self._config)
         except Exception as e:
-            status_panel.update(
-                f"[bold red]DISCONNECTED[/]\n{e}"
-            )
+            status_panel.update(f"[bold red]DISCONNECTED[/]\n{e}")
             status_panel.styles.border = ("solid", "red")
-            refresh_label.update(f"  Last attempt: {time.strftime('%H:%M:%S')}  |  Press [bold]r[/] to retry  |  [bold]q[/] to quit")
+            refresh_label.update(
+                f"  Last attempt: {time.strftime('%H:%M:%S')}  |  Press [bold]r[/] to retry  |  [bold]q[/] to quit"
+            )
             return
 
         elapsed = time.time() - start
@@ -172,7 +172,9 @@ class DashboardApp(App):
         # -- Server identity --
         cursor = conn.cursor()
         try:
-            cursor.execute("SELECT @@SERVERNAME AS server_name, @@VERSION AS server_version")
+            cursor.execute(
+                "SELECT @@SERVERNAME AS server_name, @@VERSION AS server_version"
+            )
             row = cursor.fetchone()
             name = row.server_name.strip()
             # Grab just the first line of @@VERSION
