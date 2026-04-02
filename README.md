@@ -27,6 +27,7 @@ This toolkit solves all of it through a single CLI with versioned migrations, au
 | `dbops backup` | Full backup with `COMPRESSION`, `CHECKSUM`, and `RESTORE VERIFYONLY` |
 | `dbops restore` | Restore with auto `WITH MOVE`, target naming, and status verification |
 | `dbops failover-test` | Write/read validation + AG replica health + optional failover trigger |
+| `dbops dashboard` | Live TUI dashboard with auto-refresh for real-time server monitoring |
 
 **CI/CD Pipelines (all three included):**
 
@@ -47,6 +48,163 @@ This toolkit solves all of it through a single CLI with versioned migrations, au
 - **JSON mode** -- `dbops --json healthcheck` for machine-readable output
 - **YAML config** -- Environment-specific settings (dev/staging/prod/docker)
 - **Docker support** -- Containerized CLI + SQL Server 2022 dev environment
+
+## Practical Use for SQL DBAs
+
+This toolkit replaces manual, repetitive tasks you'd normally do in SSMS or with ad-hoc T-SQL.
+
+### What it replaces in your daily work
+
+**Morning health checks** -- Instead of opening SSMS, connecting to each server, and running queries one by one:
+```bash
+dbops healthcheck --config config/env-prod.yml
+```
+Connectivity, database status, disk space, AG replica health, and top wait stats in one shot. Add `--json` to pipe it into monitoring or a dashboard.
+
+**Backup operations** -- Instead of right-clicking in SSMS or maintaining a patchwork of SQL Agent jobs with slightly different settings per server, you get a consistent backup with compression, checksum, and verification every time:
+```bash
+dbops backup --database MyApp
+```
+
+**Restore for dev/test refreshes** -- The restore command auto-detects data/log files and generates the WITH MOVE clauses for you. No more manually editing restore scripts when file paths differ between prod and dev:
+```bash
+dbops restore --source-backup /backups/MyApp.bak --target-data-dir /data/
+```
+
+**AG failover validation** -- Before a maintenance window, run a write/read test and check replica sync state programmatically, instead of manually querying DMVs:
+```bash
+dbops failover-test --config config/env-prod.yml
+```
+
+### Why CLI over SSMS
+
+| Manual (SSMS) | This toolkit |
+|---|---|
+| Steps vary by who runs them | Same command, same result every time |
+| Hard to audit | Commands logged with timestamps |
+| Can't integrate with CI/CD | JSON output feeds into pipelines |
+| One server at a time | Scriptable across environments |
+| Knowledge lives in people's heads | Knowledge lives in config files and code |
+
+### JSON Output for Monitoring and Dashboards
+
+Every command supports `--json` for machine-readable output. This is what makes the toolkit useful beyond the terminal -- you can feed structured data into monitoring systems, dashboards, and alerting pipelines.
+
+```bash
+dbops --json healthcheck --config config/env-prod.yml
+```
+
+Output:
+
+```json
+[
+  {
+    "section": "connectivity",
+    "status": "ok",
+    "data": { "server": "prod-sql-01.corp.local,1433", "latency_sec": 0.045 }
+  },
+  {
+    "section": "Server Identity",
+    "status": "ok",
+    "data": [
+      { "server_name": "PROD-SQL-01", "server_version": "Microsoft SQL Server 2022 (RTM-CU23)" }
+    ]
+  },
+  {
+    "section": "Database List",
+    "status": "ok",
+    "data": [
+      { "name": "AppDB", "status": "ONLINE", "recovery_model": "FULL", "size_mb": "2048.00" },
+      { "name": "ReportDB", "status": "ONLINE", "recovery_model": "SIMPLE", "size_mb": "512.00" }
+    ]
+  },
+  {
+    "section": "Disk Space (xp_fixeddrives)",
+    "status": "ok",
+    "data": [
+      { "drive": "C", "MB free": "102400" },
+      { "drive": "D", "MB free": "524288" }
+    ]
+  },
+  {
+    "section": "AG Replica Status",
+    "status": "ok",
+    "data": [
+      { "ag_name": "AG_Production", "replica": "PROD-SQL-01", "role": "PRIMARY", "sync_health": "HEALTHY" },
+      { "ag_name": "AG_Production", "replica": "PROD-SQL-02", "role": "SECONDARY", "sync_health": "HEALTHY" }
+    ]
+  },
+  {
+    "section": "Top 5 Wait Stats",
+    "status": "ok",
+    "data": [
+      { "wait_type": "CXPACKET", "wait_sec": "1234.56", "signal_wait_sec": "12.34", "wait_count": "98765" }
+    ]
+  },
+  {
+    "section": "summary",
+    "status": "complete",
+    "data": { "passed": 5, "skipped": 0, "server": "prod-sql-01.corp.local,1433" }
+  }
+]
+```
+
+#### Piping into monitoring and dashboards
+
+**Log to file for Splunk/ELK ingestion:**
+```bash
+dbops --json healthcheck --config config/env-prod.yml > /var/log/dbops/healthcheck.json
+```
+
+**Quick disk space alert with jq:**
+```bash
+dbops --json healthcheck | jq -r '
+  .[] | select(.section == "Disk Space (xp_fixeddrives)") |
+  .data[] | select((.["MB free"] | tonumber) < 10240) |
+  "WARNING: Drive \(.drive) has only \(.["MB free"]) MB free"
+'
+```
+
+**Check for offline databases:**
+```bash
+dbops --json healthcheck | jq -r '
+  .[] | select(.section == "Database List") |
+  .data[] | select(.status != "ONLINE") |
+  "ALERT: \(.name) is \(.status)"
+'
+```
+
+**Feed into a cron job for scheduled monitoring:**
+```bash
+# crontab -e
+*/15 * * * * DBOPS_SQL_PASSWORD=$(cat /run/secrets/sql_password) dbops --json healthcheck --config /opt/dbops/config/env-prod.yml >> /var/log/dbops/healthcheck.jsonl 2>&1
+```
+
+**Post results to a Slack webhook:**
+```bash
+RESULT=$(dbops --json healthcheck)
+FAILED=$(echo "$RESULT" | jq '[.[] | select(.status == "fail")] | length')
+
+if [ "$FAILED" -gt 0 ]; then
+  curl -X POST "$SLACK_WEBHOOK_URL" \
+    -H 'Content-Type: application/json' \
+    -d "{\"text\": \"DB Health Check FAILED -- $FAILED check(s) down on prod-sql-01\"}"
+fi
+```
+
+**Push metrics to Prometheus Pushgateway:**
+```bash
+dbops --json healthcheck | jq -r '
+  .[] | select(.section == "Disk Space (xp_fixeddrives)") |
+  .data[] | "dbops_disk_free_mb{drive=\"\(.drive)\"} \(.["MB free"])"
+' | curl --data-binary @- http://pushgateway:9091/metrics/job/dbops
+```
+
+### The real value
+
+**Operational consistency.** The #1 risk in DBA work isn't that the task is hard -- it's that someone skips the VERIFYONLY after a backup, restores to the wrong path, or forgets to check AG sync before a failover. This toolkit bakes those steps into the commands so they can't be skipped.
+
+Once the roadmap items land (multi-server, alerting, scheduled jobs), it becomes a lightweight **self-service operations platform** -- on-call can run `dbops healthcheck` without needing deep SQL Server knowledge.
 
 ## Quick Start
 
@@ -186,6 +344,10 @@ dbops failover-test --database MyDB
 
 # ----- Config override -----
 dbops healthcheck --config config/env-prod.yml
+
+# ----- Dashboard -----
+dbops dashboard                                          # auto-refreshes every 30s
+dbops dashboard --config config/env-prod.yml --refresh 15
 ```
 
 ## Project Structure
@@ -300,7 +462,7 @@ All three pipelines implement the same deployment lifecycle, so you can compare 
 - [ ] Full restore chain validation (Full + Diff + Log)
 - [ ] AG failover with automatic rollback
 - [ ] Prometheus metrics endpoint for monitoring integration
-- [ ] Interactive TUI dashboard for real-time server status
+- [x] Interactive TUI dashboard for real-time server status
 - [ ] Azure Key Vault integration for secrets management
 - [ ] Kubernetes deployment manifests
 - [ ] Rollback migration support (U### prefix)

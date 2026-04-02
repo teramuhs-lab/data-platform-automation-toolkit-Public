@@ -3,6 +3,7 @@
 import typer
 
 from dbops.commands.backup import run_backup
+from dbops.commands.dashboard import run_dashboard
 from dbops.commands.drift_check import run_drift_check
 from dbops.commands.failover_test import run_failover_test
 from dbops.commands.healthcheck import run_healthcheck
@@ -122,6 +123,19 @@ def failover_test(
 ):
     """Validate database functionality and AG failover readiness."""
     run_failover_test(config, database=database, execute_failover=execute_failover)
+
+
+@app.command()
+def dashboard(
+    config: str = typer.Option(
+        "config/env-dev.yml", "--config", "-c", help="Path to YAML config file"
+    ),
+    refresh: int = typer.Option(
+        30, "--refresh", "-r", help="Auto-refresh interval in seconds"
+    ),
+):
+    """Launch an interactive TUI dashboard for real-time server monitoring."""
+    run_dashboard(config, refresh=refresh)
 
 
 if __name__ == "__main__":
