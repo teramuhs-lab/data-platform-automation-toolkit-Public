@@ -142,8 +142,25 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment:
       name: dev
+
+    # --- SQL Server service container (runs alongside the job) ---
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: 'CiTest!Strong2026'
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'CiTest!Strong2026' -C -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
-      DBOPS_SQL_PASSWORD: ${{ secrets.DBOPS_SQL_PASSWORD }}
+      DBOPS_SQL_PASSWORD: 'CiTest!Strong2026'
+
     steps:
       - uses: actions/checkout@v4
 
@@ -152,8 +169,35 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install ODBC Driver 18
+        run: |
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          curl -fsSL https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+          odbcinst -q -d
+
       - name: Install dbops CLI
         run: pip install -e .
+
+      - name: Wait for SQL Server to be ready
+        run: |
+          for i in $(seq 1 30); do
+            python -c "
+          import pyodbc
+          try:
+              conn = pyodbc.connect(
+                  'DRIVER={ODBC Driver 18 for SQL Server};SERVER=127.0.0.1,1433;UID=sa;PWD=CiTest!Strong2026;Encrypt=no;TrustServerCertificate=yes;',
+                  timeout=5
+              )
+              print('SQL Server is ready')
+              conn.close()
+              exit(0)
+          except Exception as e:
+              print(f'Attempt {$i}: {e}')
+              exit(1)
+          " && break || sleep 2
+          done
 
       - name: Migration dry run
         run: dbops migrate --config config/env-dev.yml --database dbops_dev --dry-run
