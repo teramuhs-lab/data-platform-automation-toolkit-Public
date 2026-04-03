@@ -171,12 +171,8 @@ jobs:
 
       - name: Install ODBC Driver 18
         run: |
-          if ! dpkg -s msodbcsql18 > /dev/null 2>&1; then
-            curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc > /dev/null
-            echo "deb [arch=amd64] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list
-            sudo apt-get update
-            sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
-          fi
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
           odbcinst -q -d
 
       - name: Install dbops CLI
