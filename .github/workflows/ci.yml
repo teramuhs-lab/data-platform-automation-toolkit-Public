@@ -171,6 +171,7 @@ jobs:
 
       - name: Install ODBC Driver 18
         run: |
+          sudo rm -f /etc/apt/sources.list.d/mssql-release.list
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
           odbcinst -q -d
