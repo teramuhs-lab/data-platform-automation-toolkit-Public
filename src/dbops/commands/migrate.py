@@ -17,7 +17,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from dbops.config import load_config
-from dbops.db import get_connection
+from dbops.db import ensure_database, get_connection
 from dbops.logging import add_json_result, flush_json, is_json_mode, setup_logging
 
 console = Console()
@@ -137,6 +137,9 @@ def run_migrate(
     if not versioned and not repeatable:
         console.print("[yellow]No migration scripts found.[/yellow]")
         return
+
+    # ---- Ensure database exists ----
+    ensure_database(config)
 
     # ---- Connect ----
     conn = get_connection(config)
