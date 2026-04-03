@@ -171,11 +171,22 @@ jobs:
 
       - name: Install ODBC Driver 18
         run: |
-          # Remove EVERY apt source that references packages.microsoft.com (any filename, any format)
-          sudo grep -rl 'packages.microsoft.com' /etc/apt/sources.list.d/ | xargs -r sudo rm -v || true
-          sudo rm -f /usr/share/keyrings/microsoft-prod.gpg
-          sudo rm -f /etc/apt/trusted.gpg.d/microsoft*.gpg
-          # Add GPG key and repo from scratch
+          # --- Purge ALL Microsoft apt config (sources + keys) regardless of format or filename ---
+          # 1. Remove any file in sources.list.d that mentions Microsoft (catches .list, .sources, any name)
+          for f in /etc/apt/sources.list.d/*; do
+            if [ -f "$f" ] && grep -qi 'microsoft' "$f" 2>/dev/null; then
+              sudo rm -v "$f"
+            fi
+          done
+          # 2. Strip Microsoft lines from main sources.list
+          sudo sed -i '/packages\.microsoft\.com/d' /etc/apt/sources.list 2>/dev/null || true
+          # 3. Remove ALL Microsoft signing keys (every known location)
+          sudo rm -f /etc/apt/trusted.gpg.d/microsoft*
+          sudo rm -f /usr/share/keyrings/microsoft*
+          # 4. Debug: verify clean state
+          echo "=== Remaining sources ==="
+          grep -r 'microsoft' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || echo "Clean — no Microsoft references"
+          # 5. Add GPG key and repo from scratch (single, consistent signed-by)
           curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
           sudo apt-get update
