@@ -171,17 +171,17 @@ jobs:
 
       - name: Install ODBC Driver 18
         run: |
-          if ! dpkg -s msodbcsql18 > /dev/null 2>&1; then
-            # Remove any existing Microsoft sources to avoid conflicts
-            sudo rm -f /etc/apt/sources.list.d/mssql-release.list
-            sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
-            sudo rm -f /etc/apt/trusted.gpg.d/microsoft.asc
-            # Add Microsoft GPG key and repository cleanly
-            curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
-            echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list
-            sudo apt-get update
-            sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
-          fi
+          # Remove ALL existing Microsoft apt sources (.list and .sources formats)
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.sources
+          sudo rm -f /etc/apt/sources.list.d/mssql-release.list
+          sudo rm -f /etc/apt/trusted.gpg.d/microsoft.asc
+          sudo rm -f /usr/share/keyrings/microsoft-prod.gpg
+          # Add GPG key and repo from scratch
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
           odbcinst -q -d
 
       - name: Install dbops CLI
