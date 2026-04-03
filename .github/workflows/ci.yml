@@ -171,12 +171,14 @@ jobs:
 
       - name: Install ODBC Driver 18
         run: |
-          # Remove ALL existing Microsoft apt sources (.list and .sources formats)
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.sources
-          sudo rm -f /etc/apt/sources.list.d/mssql-release.list
-          sudo rm -f /etc/apt/trusted.gpg.d/microsoft.asc
+          # Nuclear cleanup — remove ALL Microsoft apt sources (any format, any name)
+          sudo find /etc/apt/sources.list.d/ -name '*microsoft*' -delete -print || true
+          sudo find /etc/apt/sources.list.d/ -name '*mssql*' -delete -print || true
+          sudo find /etc/apt/trusted.gpg.d/ -name '*microsoft*' -delete -print || true
           sudo rm -f /usr/share/keyrings/microsoft-prod.gpg
+          # Debug: show what's left
+          echo "=== Remaining sources ==="
+          ls -la /etc/apt/sources.list.d/ || true
           # Add GPG key and repo from scratch
           curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
