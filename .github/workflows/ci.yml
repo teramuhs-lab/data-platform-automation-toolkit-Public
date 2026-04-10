@@ -20,6 +20,9 @@ on:
     paths:
       - 'database/**'
       - 'src/**'
+      - 'tests/**'
+      - 'config/**'
+      - 'infra/**'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
