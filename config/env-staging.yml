@@ -1,15 +1,15 @@
-# Staging environment configuration
+# Staging environment configuration — Azure SQL
 environment: staging
 sql:
   driver: "ODBC Driver 18 for SQL Server"
   server: "${DB_HOST_STAGING}"
-  database: "master"
-  username: "sa"
+  database: "dbops_staging"
+  username: "${DB_ADMIN_USERNAME}"
   password_env: "DBOPS_SQL_PASSWORD"
 options:
   encrypt: true
-  trust_server_certificate: true
-  connection_timeout: 15
+  trust_server_certificate: false
+  connection_timeout: 30
 backup:
   backup_dir: "/backups"
   compression: true

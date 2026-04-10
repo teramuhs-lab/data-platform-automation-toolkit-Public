@@ -1,18 +1,16 @@
-# Production environment configuration
+# Production environment configuration — Azure SQL
 environment: prod
-
-database:
-  host: ${DB_HOST}
-  port: 1433
-  trusted_connection: true
-  connect_timeout: 30
-
+sql:
+  driver: "ODBC Driver 18 for SQL Server"
+  server: "${DB_HOST_PROD}"
+  database: "dbops_prod"
+  username: "${DB_ADMIN_USERNAME}"
+  password_env: "DBOPS_SQL_PASSWORD"
+options:
+  encrypt: true
+  trust_server_certificate: false
+  connection_timeout: 30
 backup:
-  path: /var/backups/mssql
+  backup_dir: "/backups"
   compression: true
-  verify_after_backup: true
-  retention_days: 30
-
-logging:
-  level: INFO
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  verify: true

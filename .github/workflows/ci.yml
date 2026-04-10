@@ -242,6 +242,8 @@ jobs:
       name: staging                          # Configure required reviewers in GitHub settings
     env:
       DBOPS_SQL_PASSWORD: ${{ secrets.DBOPS_SQL_PASSWORD }}
+      DB_HOST_STAGING: ${{ vars.DB_HOST_STAGING }}
+      DB_ADMIN_USERNAME: ${{ vars.DB_ADMIN_USERNAME }}
     steps:
       - uses: actions/checkout@v4
 
@@ -250,17 +252,24 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install ODBC Driver 18
+        run: |
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+
       - name: Install dbops CLI
         run: pip install -e .
 
       - name: Migration dry run
-        run: dbops migrate --config config/env-staging.yml --database dbops_staging --dry-run
+        run: dbops migrate --config config/env-staging.yml --dry-run
 
       - name: Apply migrations and run DB tests
-        run: dbops migrate --config config/env-staging.yml --database dbops_staging --test
+        run: dbops migrate --config config/env-staging.yml --test
 
       - name: Post-deploy drift check
-        run: dbops drift-check --config config/env-staging.yml --database dbops_staging
+        run: dbops drift-check --config config/env-staging.yml
 
   # -----------------------------------------------
   # Job 4: Deploy to Production (requires environment approval)
@@ -274,6 +283,8 @@ jobs:
       name: production                       # Configure required reviewers + wait timer
     env:
       DBOPS_SQL_PASSWORD: ${{ secrets.DBOPS_SQL_PASSWORD }}
+      DB_HOST_PROD: ${{ vars.DB_HOST_PROD }}
+      DB_ADMIN_USERNAME: ${{ vars.DB_ADMIN_USERNAME }}
     steps:
       - uses: actions/checkout@v4
 
@@ -282,17 +293,24 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install ODBC Driver 18
+        run: |
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+
       - name: Install dbops CLI
         run: pip install -e .
 
       - name: Migration dry run (review output)
-        run: dbops migrate --config config/env-prod.yml --database dbops_prod --dry-run
+        run: dbops migrate --config config/env-prod.yml --dry-run
 
       - name: Apply migrations and validate
-        run: dbops migrate --config config/env-prod.yml --database dbops_prod --test
+        run: dbops migrate --config config/env-prod.yml --test
 
       - name: Post-deploy drift check
-        run: dbops drift-check --config config/env-prod.yml --database dbops_prod
+        run: dbops drift-check --config config/env-prod.yml
 
       - name: Production health check
         run: dbops healthcheck --config config/env-prod.yml
