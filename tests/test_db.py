@@ -98,4 +98,4 @@ def test_get_connection_calls_pyodbc(mock_connect, sample_config):
 def test_get_connection_raises_on_failure(mock_connect, sample_config):
     """Verify get_connection propagates connection errors."""
     with pytest.raises(Exception, match="Connection refused"):
-        get_connection(sample_config)
+        get_connection(sample_config, retries=1)

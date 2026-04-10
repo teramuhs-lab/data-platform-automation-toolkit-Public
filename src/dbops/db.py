@@ -1,5 +1,7 @@
 """Database connection management for SQL Server."""
 
+import time
+
 import pyodbc
 
 
@@ -39,8 +41,18 @@ def ensure_database(config: dict) -> None:
         pass  # Azure SQL — database must already exist (created by Terraform)
 
 
-def get_connection(config: dict) -> pyodbc.Connection:
-    """Create and return a pyodbc connection to SQL Server."""
+def get_connection(config: dict, retries: int = 5, delay: int = 10) -> pyodbc.Connection:
+    """Create and return a pyodbc connection to SQL Server.
+
+    Retries on transient errors (e.g. Azure SQL serverless resuming).
+    """
     conn_str = build_connection_string(config)
     timeout = config.get("options", {}).get("connection_timeout", 30)
-    return pyodbc.connect(conn_str, timeout=timeout)
+    for attempt in range(1, retries + 1):
+        try:
+            return pyodbc.connect(conn_str, timeout=timeout)
+        except pyodbc.Error:
+            if attempt == retries:
+                raise
+            print(f"Connection attempt {attempt}/{retries} failed, retrying in {delay}s...")
+            time.sleep(delay)
