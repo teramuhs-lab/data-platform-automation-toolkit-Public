@@ -42,4 +42,5 @@ def ensure_database(config: dict) -> None:
 def get_connection(config: dict) -> pyodbc.Connection:
     """Create and return a pyodbc connection to SQL Server."""
     conn_str = build_connection_string(config)
-    return pyodbc.connect(conn_str, timeout=10)
+    timeout = config.get("options", {}).get("connection_timeout", 30)
+    return pyodbc.connect(conn_str, timeout=timeout)

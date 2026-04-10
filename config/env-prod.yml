@@ -9,7 +9,7 @@ sql:
 options:
   encrypt: true
   trust_server_certificate: false
-  connection_timeout: 30
+  connection_timeout: 120
 backup:
   backup_dir: "/backups"
   compression: true
