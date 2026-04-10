@@ -91,7 +91,7 @@ def test_get_connection_calls_pyodbc(mock_connect, sample_config):
     mock_connect.assert_called_once()
     call_args = mock_connect.call_args
     assert "DRIVER={ODBC Driver 18 for SQL Server}" in call_args[0][0]
-    assert call_args[1]["timeout"] == 10
+    assert call_args[1]["timeout"] == 30
 
 
 @patch("dbops.db.pyodbc.connect", side_effect=Exception("Connection refused"))
