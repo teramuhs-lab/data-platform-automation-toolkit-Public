@@ -90,6 +90,40 @@ resource "random_id" "suffix" {
 }
 
 # -----------------------------------------------
+# Azure Key Vault — stores SQL password securely
+# -----------------------------------------------
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "main" {
+  name                       = "${var.project_name}-kv-${random_id.suffix.hex}"
+  resource_group_name        = azurerm_resource_group.main.name
+  location                   = azurerm_resource_group.main.location
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  soft_delete_retention_days = 7
+  purge_protection_enabled   = false
+
+  tags = azurerm_resource_group.main.tags
+}
+
+# Grant the Terraform-running identity permission to manage secrets
+resource "azurerm_key_vault_access_policy" "terraform" {
+  key_vault_id = azurerm_key_vault.main.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = data.azurerm_client_config.current.object_id
+
+  secret_permissions = ["Get", "List", "Set", "Delete", "Purge", "Recover"]
+}
+
+resource "azurerm_key_vault_secret" "sql_password" {
+  name         = "dbops-sql-password"
+  value        = var.sql_admin_password
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.terraform]
+}
+
+# -----------------------------------------------
 # Firewall: Allow Azure services + GitHub Actions
 # -----------------------------------------------
 resource "azurerm_mssql_firewall_rule" "allow_azure_services" {
@@ -168,4 +202,14 @@ output "prod_database" {
 output "sql_admin_login" {
   description = "SQL admin username"
   value       = azurerm_mssql_server.main.administrator_login
+}
+
+output "key_vault_name" {
+  description = "Azure Key Vault name"
+  value       = azurerm_key_vault.main.name
+}
+
+output "key_vault_uri" {
+  description = "Azure Key Vault URI"
+  value       = azurerm_key_vault.main.vault_uri
 }
