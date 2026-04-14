@@ -46,9 +46,13 @@ MIGRATION_DIR = Path("database/migrations")
 SEED_DIR = Path("database/seed-data")
 TEST_DIR = Path("database/tests")
 
-# Regex that matches valid migration filenames: V001__create_table.sql, R042__seed_data.sql, etc.
+# Regex that matches valid FORWARD migration filenames:
+#   V001__create_table.sql, R042__seed_data.sql
+#
+# The negative lookahead `(?!rollback__)` makes sure V003__rollback__foo.sql
+# is NOT matched here — rollback scripts are handled by dbops/commands/rollback.py.
 # Groups: (1) V or R, (2) 3-digit version, (3) description
-VERSION_PATTERN = re.compile(r"^(V|R)(\d{3})__(.+)\.sql$")
+VERSION_PATTERN = re.compile(r"^(V|R)(\d{3})__(?!rollback__)(.+)\.sql$")
 
 
 def _checksum(file_path: Path) -> str:

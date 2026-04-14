@@ -28,6 +28,7 @@ from dbops.commands.failover_test import run_failover_test
 from dbops.commands.healthcheck import run_healthcheck
 from dbops.commands.migrate import run_migrate
 from dbops.commands.restore import run_restore
+from dbops.commands.rollback import run_rollback
 from dbops.logging import set_json_mode
 
 # Create the Typer app. The help text is shown when users run `dbops --help`.
@@ -126,6 +127,25 @@ def migrate(
     run_migrate(
         config, target_database=target_database, dry_run=dry_run, run_tests=run_tests
     )
+
+
+@app.command()
+def rollback(
+    config: str = typer.Option(
+        "config/env-dev.yml", "--config", "-c", help="Path to YAML config file"
+    ),
+    target_database: str = typer.Option(
+        None, "--database", "-d", help="Target database (overrides config)"
+    ),
+    steps: int = typer.Option(
+        1, "--steps", "-s", help="How many of the most recent migrations to roll back"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show the rollback plan without executing it"
+    ),
+):
+    """Roll back the last N applied migrations using their V###__rollback__*.sql scripts."""
+    run_rollback(config, target_database=target_database, steps=steps, dry_run=dry_run)
 
 
 @app.command(name="drift-check")

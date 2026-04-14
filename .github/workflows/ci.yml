@@ -95,9 +95,11 @@ jobs:
           errors=0
           for f in database/migrations/*.sql; do
             basename=$(basename "$f")
-            # Regex: starts with V, 3 digits, __, anything, .sql
-            if [[ ! "$basename" =~ ^V[0-9]{3}__.+\.sql$ ]]; then
-              echo "::error file=$f::Invalid migration name: $basename (expected V###__description.sql)"
+            # Two valid patterns:
+            #   Forward  migration: V###__description.sql
+            #   Rollback script:    V###__rollback__description.sql
+            if [[ ! "$basename" =~ ^V[0-9]{3}__(rollback__)?.+\.sql$ ]]; then
+              echo "::error file=$f::Invalid migration name: $basename (expected V###__description.sql or V###__rollback__description.sql)"
               errors=$((errors + 1))
             fi
           done
