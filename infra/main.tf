@@ -124,6 +124,87 @@ resource "azurerm_key_vault_secret" "sql_password" {
 }
 
 # -----------------------------------------------
+# Azure Monitor — Log Analytics Workspace
+# -----------------------------------------------
+resource "azurerm_log_analytics_workspace" "main" {
+  name                = "${var.project_name}-logs-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+
+  tags = azurerm_resource_group.main.tags
+}
+
+# -----------------------------------------------
+# Diagnostic Settings — send SQL metrics and logs to Log Analytics
+# -----------------------------------------------
+resource "azurerm_monitor_diagnostic_setting" "staging" {
+  name                       = "diag-staging"
+  target_resource_id         = azurerm_mssql_database.staging.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+
+  enabled_log { category = "SQLInsights" }
+  enabled_log { category = "Errors" }
+  enabled_log { category = "Timeouts" }
+  enabled_log { category = "Deadlocks" }
+  enabled_log { category = "Blocks" }
+
+  enabled_metric { category = "Basic" }
+  enabled_metric { category = "InstanceAndAppAdvanced" }
+}
+
+resource "azurerm_monitor_diagnostic_setting" "prod" {
+  name                       = "diag-prod"
+  target_resource_id         = azurerm_mssql_database.prod.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+
+  enabled_log { category = "SQLInsights" }
+  enabled_log { category = "Errors" }
+  enabled_log { category = "Timeouts" }
+  enabled_log { category = "Deadlocks" }
+  enabled_log { category = "Blocks" }
+
+  enabled_metric { category = "Basic" }
+  enabled_metric { category = "InstanceAndAppAdvanced" }
+}
+
+# -----------------------------------------------
+# Alert: High CPU on prod database
+# -----------------------------------------------
+resource "azurerm_monitor_action_group" "main" {
+  name                = "${var.project_name}-alerts"
+  resource_group_name = azurerm_resource_group.main.name
+  short_name          = "dbopsalerts"
+
+  tags = azurerm_resource_group.main.tags
+}
+
+resource "azurerm_monitor_metric_alert" "prod_high_cpu" {
+  name                = "prod-high-cpu"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_mssql_database.prod.id]
+  description         = "Alert when prod database CPU exceeds 80%"
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.Sql/servers/databases"
+    metric_name      = "cpu_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = 80
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.main.id
+  }
+
+  tags = azurerm_resource_group.main.tags
+}
+
+# -----------------------------------------------
 # Firewall: Allow Azure services + GitHub Actions
 # -----------------------------------------------
 resource "azurerm_mssql_firewall_rule" "allow_azure_services" {
@@ -212,4 +293,9 @@ output "key_vault_name" {
 output "key_vault_uri" {
   description = "Azure Key Vault URI"
   value       = azurerm_key_vault.main.vault_uri
+}
+
+output "log_analytics_workspace" {
+  description = "Log Analytics Workspace name"
+  value       = azurerm_log_analytics_workspace.main.name
 }
