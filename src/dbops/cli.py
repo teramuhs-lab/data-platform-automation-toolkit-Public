@@ -1,7 +1,26 @@
-"""CLI entry point for the dbops toolkit."""
+"""Command-line interface for the dbops toolkit.
+
+This is the entry point when you run `dbops <command>` in a terminal.
+Under the hood it's a Typer app — Typer turns Python functions into
+CLI commands automatically, using the type hints and docstrings.
+
+Installed commands:
+  dbops healthcheck     — run health queries and print a report
+  dbops backup          — back up user databases to .bak files
+  dbops restore         — restore a database from a .bak file
+  dbops migrate         — apply SQL migrations + seed data
+  dbops drift-check     — compare source-controlled schema vs live schema
+  dbops failover-test   — validate DB availability and optionally trigger AG failover
+  dbops dashboard       — interactive terminal dashboard (TUI)
+
+Global flag:
+  --json   → switches output to machine-readable JSON (for CI pipelines)
+"""
 
 import typer
 
+# Import each command's implementation. We only import the *function*, not
+# the whole module, so the CLI stays decoupled from the internals.
 from dbops.commands.backup import run_backup
 from dbops.commands.dashboard import run_dashboard
 from dbops.commands.drift_check import run_drift_check
@@ -11,9 +30,12 @@ from dbops.commands.migrate import run_migrate
 from dbops.commands.restore import run_restore
 from dbops.logging import set_json_mode
 
+# Create the Typer app. The help text is shown when users run `dbops --help`.
 app = typer.Typer(help="Data Platform Automation Toolkit (DBA DevOps CLI)")
 
 
+# @app.callback runs before any subcommand. We use it to handle global flags
+# that apply to every command (like --json output mode).
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -22,10 +44,21 @@ def main(
     ),
 ):
     """Data Platform Automation Toolkit (DBA DevOps CLI)."""
+    # If --json was passed, flip the global logging mode so every command
+    # produces JSON instead of colored console text.
     if json_output:
         set_json_mode(True)
+
+    # If the user typed `dbops` with no subcommand, print the help text.
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
+
+
+# -----------------------------------------------------------------------------
+# Each @app.command() below turns a Python function into a CLI subcommand.
+# Typer inspects the type hints to generate --help, validate inputs, and
+# parse arguments automatically.
+# -----------------------------------------------------------------------------
 
 
 @app.command()
@@ -51,6 +84,7 @@ def backup(
     ),
 ):
     """Back up one or all user databases with compression and checksum."""
+    # `not no_verify` is cleaner than passing a double-negative further down.
     run_backup(config, database=database, verify=not no_verify)
 
 
@@ -138,5 +172,8 @@ def dashboard(
     run_dashboard(config, refresh=refresh)
 
 
+# Standard Python idiom — only run app() when this file is executed directly,
+# not when it's imported as a module. But in practice, Typer's entry point
+# hooked up in pyproject.toml calls app() through a different path.
 if __name__ == "__main__":
     app()

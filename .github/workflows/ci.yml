@@ -1,40 +1,61 @@
-# =============================================
-# GitHub Actions Pipeline: SQL Server Database CI/CD
-# =============================================
-# Full database deployment lifecycle:
-#   Validate → Build → Deploy Dev → DB Tests → Deploy Staging → Deploy Prod
+# =============================================================================
+# GitHub Actions Pipeline — SQL Server Database CI/CD
+# =============================================================================
+# This is the automation that runs every time code is pushed to main.
+# It takes source code + SQL migrations and ships them all the way through:
 #
-# Prerequisites in GitHub:
-#   - Repository secret: DBOPS_SQL_PASSWORD
-#   - Environments: dev, staging, prod (with protection rules on staging/prod)
+#   Validate (lint, naming, tests)  →  Build Docker image
+#                                   →  Deploy to Dev    (Docker SQL Server)
+#                                   →  Deploy to Staging (Azure SQL)
+#                                   →  Deploy to Prod    (Azure SQL)
 #
-# Learn more:
-#   - Environments: https://docs.github.com/en/actions/deployment/targeting-different-environments
-#   - Concurrency:  https://docs.github.com/en/actions/using-jobs/using-concurrency
+# Each stage depends on the previous one — if tests fail, nothing deploys.
+#
+# Prerequisites set up in GitHub:
+#   - Repository SECRET:   DBOPS_SQL_PASSWORD    (the Azure SQL admin password)
+#   - Repository VARIABLES:
+#       DB_HOST_STAGING    (staging server FQDN; if empty, staging is skipped)
+#       DB_HOST_PROD       (prod server FQDN; if empty, prod is skipped)
+#       DB_ADMIN_USERNAME  (SQL admin username, e.g. "dbopsadmin")
+#   - ENVIRONMENTS:        dev, staging, production (can add reviewers)
+# =============================================================================
 
 name: Database CI/CD
 
+# -----------------------------------------------------------------------------
+# When to run this workflow
+# -----------------------------------------------------------------------------
 on:
   push:
     branches: [main]
+    # Path filters — only trigger when files in these folders change.
+    # This keeps the pipeline from running for README edits, etc.
     paths:
-      - 'database/**'
-      - 'src/**'
-      - 'tests/**'
-      - 'config/**'
-      - 'infra/**'
-      - '.github/workflows/**'
+      - 'database/**'              # SQL scripts
+      - 'src/**'                   # Python source
+      - 'tests/**'                 # Unit tests
+      - 'config/**'                # Environment YAML
+      - 'infra/**'                 # Terraform
+      - '.github/workflows/**'     # The workflow file itself
   pull_request:
     branches: [main]
 
+# -----------------------------------------------------------------------------
+# Concurrency control
+# -----------------------------------------------------------------------------
+# Group runs by workflow name + branch. cancel-in-progress: false means
+# new pushes queue up behind running pipelines instead of cancelling them.
+# We want that so we don't interrupt a deploy halfway through.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-# -----------------------------------------------
-# Job 1: Validate (lint, tests, SQL naming)
-# -----------------------------------------------
 jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1a: Lint — check Python code style
+  # ---------------------------------------------------------------------------
+  # Ruff is a fast Python linter + formatter. It catches common mistakes
+  # (unused imports, bad formatting, etc.) before they reach review.
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -53,8 +74,15 @@ jobs:
         run: ruff check src/ tests/
 
       - name: Ruff format check
+        # --check means "fail if formatting is wrong" without rewriting files.
         run: ruff format --check src/ tests/
 
+  # ---------------------------------------------------------------------------
+  # Job 1b: Validate SQL — enforce naming convention
+  # ---------------------------------------------------------------------------
+  # Every migration must be named V###__description.sql (e.g. V001__create_users.sql).
+  # Seed scripts follow the same idea with R###__. This job shell-scripts
+  # that check so bad filenames never reach deployment.
   validate-sql:
     name: Validate SQL Scripts
     runs-on: ubuntu-latest
@@ -67,6 +95,7 @@ jobs:
           errors=0
           for f in database/migrations/*.sql; do
             basename=$(basename "$f")
+            # Regex: starts with V, 3 digits, __, anything, .sql
             if [[ ! "$basename" =~ ^V[0-9]{3}__.+\.sql$ ]]; then
               echo "::error file=$f::Invalid migration name: $basename (expected V###__description.sql)"
               errors=$((errors + 1))
@@ -82,6 +111,7 @@ jobs:
         run: |
           for f in database/seed-data/*.sql; do
             basename=$(basename "$f")
+            # Seed files use R prefix instead of V
             if [[ ! "$basename" =~ ^R[0-9]{3}__.+\.sql$ ]]; then
               echo "::error file=$f::Invalid seed script name: $basename (expected R###__description.sql)"
               exit 1
@@ -89,6 +119,11 @@ jobs:
           done
           echo "All seed scripts follow naming convention."
 
+  # ---------------------------------------------------------------------------
+  # Job 1c: Unit Tests — run pytest on multiple Python versions
+  # ---------------------------------------------------------------------------
+  # Matrix strategy runs this job once per Python version in parallel.
+  # Catches version-specific bugs before they hit production.
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -106,55 +141,68 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
-          pip install pytest pytest-cov
+          pip install -e .                   # installs dbops in editable mode
+          pip install pytest pytest-cov      # test runner + coverage plugin
 
       - name: Run tests with coverage
+        # --tb=short: compact error traces. --cov: measure code coverage.
         run: |
           pytest tests/ -v --tb=short \
             --cov=dbops --cov-report=term-missing \
             --cov-report=xml:coverage.xml
 
       - name: Upload coverage
+        # Only upload from the 3.12 run (results are identical across versions).
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: coverage.xml
 
+  # ---------------------------------------------------------------------------
+  # Job 1d: Docker Build — verify the image builds and the CLI works inside it
+  # ---------------------------------------------------------------------------
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [unit-tests]
+    needs: [unit-tests]  # don't bother building if tests fail
     steps:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
+        # Tag with the commit SHA so each build is traceable.
         run: docker build -f docker/Dockerfile -t dbops:${{ github.sha }} .
 
       - name: Verify CLI runs in container
+        # Smoke test: can we at least print --help inside the container?
         run: docker run --rm dbops:${{ github.sha }} --help
 
-  # -----------------------------------------------
-  # Job 2: Deploy to Dev (automatic on main)
-  # -----------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Job 2: Deploy to Dev — integration test against a Docker SQL Server
+  # ---------------------------------------------------------------------------
+  # This is NOT a real "dev" deployment — it's a throwaway Docker SQL Server
+  # that proves the migrations apply cleanly. Think of it as a full end-to-end
+  # smoke test before we touch the real Azure databases.
   deploy-dev:
     name: Deploy to Dev
     runs-on: ubuntu-latest
     needs: [lint, validate-sql, unit-tests, docker-build]
+    # Only run on push to main (not pull requests) so PRs don't deploy.
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment:
       name: dev
 
-    # --- SQL Server service container (runs alongside the job) ---
+    # GitHub Actions "service containers" — Docker containers that run
+    # alongside the job. We spin up SQL Server 2022 for the duration.
     services:
       mssql:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
-          ACCEPT_EULA: 'Y'
-          MSSQL_SA_PASSWORD: 'CiTest!Strong2026'
+          ACCEPT_EULA: 'Y'                      # must accept Microsoft's EULA
+          MSSQL_SA_PASSWORD: 'CiTest!Strong2026' # throwaway password for CI only
         ports:
           - 1433:1433
+        # Health check — GitHub Actions waits for this to succeed before starting our job.
         options: >-
           --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'CiTest!Strong2026' -C -Q 'SELECT 1'"
           --health-interval 10s
@@ -162,6 +210,7 @@ jobs:
           --health-retries 10
 
     env:
+      # Password our dbops CLI will read — matches the throwaway one above.
       DBOPS_SQL_PASSWORD: 'CiTest!Strong2026'
 
     steps:
@@ -172,34 +221,42 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The ODBC Driver 18 is required for pyodbc to talk to SQL Server.
+      # GitHub's ubuntu runners already have Microsoft apt sources configured,
+      # but in conflicting formats — so we purge EVERYTHING Microsoft-related
+      # first, then add our own clean source. This avoids "Signed-By conflict"
+      # errors during apt-get update.
       - name: Install ODBC Driver 18
         run: |
-          # --- Purge ALL Microsoft apt config (sources + keys) regardless of format or filename ---
-          # 1. Remove any file in sources.list.d that mentions Microsoft (catches .list, .sources, any name)
+          # 1. Remove any apt source file that references Microsoft (any filename, any format)
           for f in /etc/apt/sources.list.d/*; do
             if [ -f "$f" ] && grep -qi 'microsoft' "$f" 2>/dev/null; then
               sudo rm -v "$f"
             fi
           done
-          # 2. Strip Microsoft lines from main sources.list
+          # 2. Strip Microsoft lines from /etc/apt/sources.list
           sudo sed -i '/packages\.microsoft\.com/d' /etc/apt/sources.list 2>/dev/null || true
-          # 3. Remove ALL Microsoft signing keys (every known location)
+          # 3. Remove any pre-existing Microsoft signing keys
           sudo rm -f /etc/apt/trusted.gpg.d/microsoft*
           sudo rm -f /usr/share/keyrings/microsoft*
-          # 4. Debug: verify clean state
+          # 4. Show what's left — handy for debugging if this step ever fails
           echo "=== Remaining sources ==="
           grep -r 'microsoft' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || echo "Clean — no Microsoft references"
-          # 5. Add GPG key and repo from scratch (single, consistent signed-by)
+          # 5. Install the GPG key and add a single, consistent apt source
           curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+          # Verify the driver is registered
           odbcinst -q -d
 
       - name: Install dbops CLI
+        # -e = editable install: code changes are picked up without reinstall.
         run: pip install -e .
 
       - name: Wait for SQL Server to be ready
+        # Service container health check usually suffices, but we double-check
+        # by actually connecting with pyodbc — the real code path we care about.
         run: |
           for i in $(seq 1 30); do
             python -c "
@@ -218,32 +275,41 @@ jobs:
           " && break || sleep 2
           done
 
+      # --- The actual deployment flow, using our dbops CLI ---
+
       - name: Migration dry run
+        # --dry-run previews what WOULD be applied without touching the DB.
+        # Gives reviewers a sanity check on the plan.
         run: dbops migrate --config config/env-dev.yml --database dbops_dev --dry-run
 
       - name: Apply migrations and seed data
         run: dbops migrate --config config/env-dev.yml --database dbops_dev
 
       - name: Run database tests
+        # --test re-runs migrate but also executes database/tests/*.sql after.
         run: dbops migrate --config config/env-dev.yml --database dbops_dev --test
 
       - name: Post-deploy drift check
+        # Compare what's actually in the DB to what's in source control.
         run: dbops drift-check --config config/env-dev.yml --database dbops_dev
 
       - name: Post-deploy health check
         run: dbops healthcheck --config config/env-dev.yml
 
-  # -----------------------------------------------
-  # Job 3: Deploy to Staging (requires environment approval)
-  # -----------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Job 3: Deploy to Staging — real Azure SQL database
+  # ---------------------------------------------------------------------------
+  # Only runs if DB_HOST_STAGING is set in repo variables (so it skips
+  # gracefully until you've provisioned Azure SQL and added the variable).
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: [deploy-dev]
-    if: vars.DB_HOST_STAGING != ''           # Skip until Azure SQL is configured
+    if: vars.DB_HOST_STAGING != ''
     environment:
-      name: staging                          # Configure required reviewers in GitHub settings
+      name: staging  # set required reviewers here in GitHub UI if desired
     env:
+      # Environment variables our config file will resolve at runtime.
       DBOPS_SQL_PASSWORD: ${{ secrets.DBOPS_SQL_PASSWORD }}
       DB_HOST_STAGING: ${{ vars.DB_HOST_STAGING }}
       DB_ADMIN_USERNAME: ${{ vars.DB_ADMIN_USERNAME }}
@@ -255,6 +321,7 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Shorter ODBC install — staging runner usually doesn't have conflicts.
       - name: Install ODBC Driver 18
         run: |
           curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
@@ -274,16 +341,18 @@ jobs:
       - name: Post-deploy drift check
         run: dbops drift-check --config config/env-staging.yml
 
-  # -----------------------------------------------
-  # Job 4: Deploy to Production (requires environment approval)
-  # -----------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Job 4: Deploy to Production — real Azure SQL database
+  # ---------------------------------------------------------------------------
+  # Same pattern as staging. Add reviewers and a wait timer on the
+  # "production" environment in GitHub to require manual approval.
   deploy-prod:
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: [deploy-staging]
-    if: vars.DB_HOST_PROD != ''              # Skip until Azure SQL is configured
+    if: vars.DB_HOST_PROD != ''
     environment:
-      name: production                       # Configure required reviewers + wait timer
+      name: production
     env:
       DBOPS_SQL_PASSWORD: ${{ secrets.DBOPS_SQL_PASSWORD }}
       DB_HOST_PROD: ${{ vars.DB_HOST_PROD }}
@@ -307,6 +376,7 @@ jobs:
         run: pip install -e .
 
       - name: Migration dry run (review output)
+        # Dry run is especially important for prod — last chance to spot a bad script.
         run: dbops migrate --config config/env-prod.yml --dry-run
 
       - name: Apply migrations and validate
